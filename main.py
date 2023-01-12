@@ -89,40 +89,41 @@ if __name__ == '__main__':
             logging.warning(f"Server {server}: DNS lookup failed for Remote Board {remote_board}: {err}")
             continue
       
+        if config['collect']:
+            server_collector = RedfishIventoryCollector(
+                config,
+                target = remote_board,
+                host = ip_address,
+                usr = usr,
+                pwd = pwd
+            )
 
-        server_collector = RedfishIventoryCollector(
-            config,
-            target = remote_board,
-            host = ip_address,
-            usr = usr,
-            pwd = pwd
-        )
+            server_collector.get_session()
 
-        server_collector.get_session()
+            try:
+                inventory = server_collector.collect()
 
-        try:
-            inventory = server_collector.collect()
+            except Exception as err:
+                logging.exception(traceback.format_exc())
+                exit()
 
-        except Exception as err:
-            logging.exception(traceback.format_exc())
-            exit()
-
-        finally:
-            server_collector.close_session()
-    
-        output = json.dumps(inventory, indent=4, sort_keys=True)
-
-        filename = f"{server}.txt"
-        output_file = open(filename, 'w')
-        print(output, file = output_file)
-        output_file.close()
+            finally:
+                server_collector.close_session()
         
+            output = json.dumps(inventory, indent=4, sort_keys=True)
+
+            if output and output != "{}":
+                filename = f"{server}.txt"
+                output_file = open(filename, 'w')
+                print(output, file = output_file)
+                output_file.close()
+
         filename = f"{server}.txt"
         input_file = open(filename, 'r')
         inventory = json.load(input_file)
         input_file.close()
 
-        device = node + "-" + pod
-        netbox_inventory_updater = NetboxInventoryUpdater(config, device)
+        device_name = node + "-" + pod
+        netbox_inventory_updater = NetboxInventoryUpdater(config, device_name)
 
         result = netbox_inventory_updater.update_device_inventory(inventory)
