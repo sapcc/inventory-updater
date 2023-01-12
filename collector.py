@@ -115,7 +115,7 @@ class RedfishIventoryCollector(object):
                 logging.warning(f"Target {self._target}: HTTP Error: {err}")
 
         except requests.exceptions.ConnectTimeout:
-            logging.errwarningor(f"Target {self._target}: Timeout while connecting to {self._host}")
+            logging.warning(f"Target {self._target}: Timeout while connecting to {self._host}")
 
         except requests.exceptions.ReadTimeout:
             logging.warning(f"Target {self._target}: Timeout while reading data from {self._host}")
@@ -249,30 +249,17 @@ class RedfishIventoryCollector(object):
                 if controller_info:
                     if controller_name:
                         controller_info.update({'Name': controller_name})
+
+                    # Get the amount of drives attached to the controller
+                    if controller_data.get('Drives@odata.count'):
+                        controller_info.update({'DrivesAttached': controller_data['Drives@odata.count']})
+
+                    controller_info['NetboxName'] = "RAID"
                     self._inventory['Controllers'].append(controller_info)
                 
                 # Get the drive URLs for later gathering the info
                 for drive in controller_data['Drives']:
                     self._urls['Drives'].append(drive['@odata.id'])
-
-    def _get_simple_storage_info(self, fields):
-        logging.info(f"Target {self._target}: Get the simple storage data.")
-        storage_collection = self.connect_server(self._urls['SimpleStorage'])
-        if storage_collection:
-            self._inventory.update({'Controllers': []})
-            self._inventory.update({'Devices': []})
-
-            for controller in storage_collection['Members']:
-                controller_data = self.connect_server(controller['@odata.id'])
-                if controller_data:
-                    controller_info = self._get_device_info(fields, controller_data)
-                    self._inventory['Controllers'].append(controller_info)
-                    
-                    if 'Devices' in controller_data:
-                        for device in controller_data['Devices']:
-                            device_info = self._get_device_info(fields, device)
-                            self._inventory['Devices'].append(device_info)
-
 
     def _get_power_info(self, fields):
         logging.info(f"Target {self._target}: Get the PSU data.")
@@ -291,6 +278,7 @@ class RedfishIventoryCollector(object):
             dimm = self.connect_server(dimm_url)
             if dimm:
                 dimm_info = self._get_device_info(fields, dimm)
+                dimm_info['NetboxName'] = f"RAM {round(self._inventory['MemorySummary']['TotalSystemMemoryGiB'])}GB"
 
                 # HPE has the DIMM Manufacturer in the OEM data
                 if 'Oem' in dimm:
@@ -345,9 +333,6 @@ class RedfishIventoryCollector(object):
         if 'Storage' in self._urls:
             fields = ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU')
             self._get_storage_info(fields)
-        elif 'SimpleStorage' in self._urls:
-            fields = ('Name', 'Model', 'Manufacturer', 'CapacityBytes')
-            self._get_simple_storage_info(fields)
         else:
             logging.warning(f"Target {self._target}: No Storage URL provided! Cannot get Storage data!")
 
@@ -356,7 +341,18 @@ class RedfishIventoryCollector(object):
             logging.info(f"Target {self._target}: Get the drive data.")
             fields = ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU', 'MediaType', 'CapacityBytes', 'Protocol')
             drives = self._get_info_from_urls(self._urls['Drives'], fields)
-            self._inventory.update({'Drives': drives})
+
+            drives_updated = []
+            for drive in drives:
+                if (drive['Protocol'] == "SATA" or drive['Protocol'] == "SAS") and drive['MediaType'] == "SSD":
+                    drive['NetboxName'] = f"SSD {round(drive['CapacityBytes']/1024/1024/1024)}GB"
+                elif (drive['Protocol'] == "PCIe" or drive['Protocol'] == "NVMe") and drive['MediaType'] == "SSD":
+                    drive['NetboxName'] = f"NVMe {round(drive['CapacityBytes']/1024/1024/1024)}GB"
+                else:
+                    logging.warning(f"Target {self._target}: Unknown Drive Type! Protocol = {drive['Protocol']}, MediaType = {drive['MediaType']}")
+                drives_updated.append(drive)
+
+            self._inventory.update({'Drives': drives_updated})
         else:
             logging.warning(f"Target {self._target}: No Drives URL provided! Cannot get drive data!")
 
@@ -386,7 +382,13 @@ class RedfishIventoryCollector(object):
             if proc_urls:
                 fields = ('Name', 'Manufacturer', 'Model', 'SerialNumber', 'PartNumber', 'SKU', 'ProcessorType', 'TotalCores', 'TotalThreads')
                 processors = self._get_info_from_urls(proc_urls, fields)
-                self._inventory.update({'Processors': processors})
+                processors_updated = []
+                for processor in processors:
+                    processor['Description'] = processor['Model']
+                    processor['NetboxName'] = f"CPU {processor['TotalCores']}C"
+                    processors_updated.append(processor)
+
+                self._inventory.update({'Processors': processors_updated})
             else:
                 logging.warning(f"Target {self._target}: No Processors found!")
 
@@ -402,8 +404,40 @@ class RedfishIventoryCollector(object):
                 pcie_urls = self._get_urls('PCIeDevices')
 
             if pcie_urls:
-                fields = ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU', 'DeviceType')
-                pcie_devices = self._get_info_from_urls(pcie_urls, fields)
+                fields = ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU', 'Links', 'PCIeFunctions')
+                pcie_devices = self._get_info_from_urls(pcie_urls, fields=fields)
+
+                # Get the DeviceClass
+                for pcie_device in pcie_devices:
+                    pci_device_index = pcie_devices.index(pcie_device)
+
+                    pcie_device_functions_urls = []
+                    pcie_functions = ""
+
+                    # Lenovo and Dell
+                    if pcie_device.get('Links'):
+                        pcie_functions = pcie_device['Links'].get('PCIeFunctions')
+                        pcie_devices[pci_device_index].pop("Links")
+
+                    # HPE
+                    if pcie_device.get('PCIeFunctions'):
+                        # Did we get the pcie_functions already above?
+                        # Lenovo has both entries (Links and PCIeFunctions)
+                        if not pcie_functions:
+                            pcie_functions_link = [pcie_device['PCIeFunctions']['@odata.id']]
+                            pcie_functions = self._get_info_from_urls(pcie_functions_link, fields=None)[0]['Members']
+                        pcie_devices[pci_device_index].pop("PCIeFunctions")
+
+                    if pcie_functions:
+                        for member in pcie_functions:
+                            pcie_device_functions_urls.append(member['@odata.id'])
+
+                    pcie_device_functions = self._get_info_from_urls(pcie_device_functions_urls, fields=None)
+                    #pcie_devices[pci_device_index]['DeviceClass'] = [k['DeviceClass'] for k in pcie_device_functions]
+                    pcie_devices[pci_device_index]['DeviceClass'] = pcie_device_functions[0].get('DeviceClass')
+                    if pcie_devices[pci_device_index]['DeviceClass'] == "NetworkController":
+                        pcie_devices[pci_device_index]['NetboxName'] = "NIC"
+
                 self._inventory.update({'PCIeDevices': pcie_devices})
             else:
                 logging.warning(f"Target {self._target}: No PCIe URLs found!")
@@ -418,7 +452,12 @@ class RedfishIventoryCollector(object):
             if nic_urls:
                 fields = ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU')
                 nic_devices = self._get_info_from_urls(nic_urls, fields)
-                self._inventory.update({'NetworkAdapters': nic_devices})
+                nic_devices_updated = []
+                for nic in nic_devices:
+                    nic['NetboxName'] = f"NIC"
+                    nic_devices_updated.append(nic)
+
+                self._inventory.update({'NetworkAdapters': nic_devices_updated})
             else:
                 logging.warning(f"Target {self._target}: No NIC URLs found!")
 
