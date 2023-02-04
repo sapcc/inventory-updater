@@ -67,37 +67,51 @@ class NetboxInventoryUpdater(object):
             else:
                 return results[0]['id']
 
-        device = self.get_device(self.device_name)
-        server_manufacturer = device[0]['device_type']['manufacturer']['id']
+        device = self.get_device()
+        server_manufacturer = device['device_type']['manufacturer']['id']
         return server_manufacturer
 
 
-    def get_device(self, device):
+    def get_device(self):
         url = self._netbox_devices_url
-        params = {'name': device}
+        params = {'name': self.device_name}
         results = self._send_request(url=url, method='GET', params=params)
-        return results
 
-    def get_device_id(self, device):
-        netbox_devices = self.get_device(device)
-        if len(netbox_devices) == 0:
-            logging.warning(f"Netbox {device}: No such device found!")
+        if len(results) == 0:
+            logging.error(f"Netbox {self.device_name}: No such device found!")
             return
         
-        elif len(netbox_devices) > 1:
-            logging.warning(f"Netbox {device}: More than one device found!")
+        elif len(results) > 1:
+            logging.error(f"Netbox {self.device_name}: More than one device found!")
             return
 
         else:
-            netbox_device = netbox_devices[0]
-        
+            netbox_device = results[0]
+
+        return netbox_device
+
+    def get_device_model(self):
+        manufacturer = ""
+        model = ""
+        netbox_device = self.get_device()
+        if netbox_device:
+            manufacturer = netbox_device['device_type']['manufacturer']['name']
+            model = netbox_device['device_type']['model']
+        return manufacturer, model
+
+    def get_device_id(self):
+        netbox_device = self.get_device()
         return netbox_device['id']
 
+    def get_device_region(self):
+        netbox_device = self.get_device()
+        matches = re.match(r'^(\w{2}-\w{2}-\d{1})[a-z]$', netbox_device['site']['slug'])
+        return matches[1]
 
-    def get_inventory(self, device):
+    def get_inventory(self):
         
         url = self._netbox_inventory_items_url
-        params = {'device': device}
+        params = {'device': self.device_name}
         results = self._send_request(url=url, method='GET', params=params)
         return results
 
@@ -134,7 +148,7 @@ class NetboxInventoryUpdater(object):
 
     def _check_item_amount(self, server_inventory, netbox_inventory):
         if len(netbox_inventory) > len(server_inventory) and len(netbox_inventory) > 0:
-            logging.info(f"Netbox {self.device_name}: Number of Netbox entries doesn't match:")
+            logging.info(f"Netbox {self.device_name}: Number of Netbox entries for {netbox_inventory[0]['name']} doesn't match:")
             logging.info(f"Netbox {self.device_name}: Netbox: {len(netbox_inventory) }")
             logging.info(f"Netbox {self.device_name}: Server: {len(server_inventory) }")
             logging.info(f"Netbox {self.device_name}: Removing entries ...")
@@ -175,7 +189,7 @@ class NetboxInventoryUpdater(object):
             # no_change = self._compare_dict(new_netbox_item, old_netbox_item)
             # if no_change:
             if new_netbox_item_json == old_netbox_item_json:
-                logging.info(f"Netbox {self.device_name}: No change for {new_netbox_item['name']}.")
+                logging.info(f"Netbox {self.device_name}: No change for {new_netbox_item['name']}")
             else:
                 if current_netbox_item:
                     logging.info(f"Netbox {self.device_name}: Updating item {new_netbox_item['name']}")
@@ -190,8 +204,8 @@ class NetboxInventoryUpdater(object):
 
     def update_device_inventory(self, server_inventory):
 
-        netbox_device_id = self.get_device_id(self.device_name)
-        netbox_inventory = self.get_inventory(self.device_name)
+        netbox_device_id = self.get_device_id()
+        netbox_inventory = self.get_inventory()
 
         # Processor
         if server_inventory.get('Processors'):
@@ -224,8 +238,9 @@ class NetboxInventoryUpdater(object):
 
         # NetworkAdapters
         server_inventory_nics = []
-        if server_inventory.get('PCIeDevices'):
-            server_inventory_nics = [item for item in server_inventory['PCIeDevices'] if item['DeviceClass'] == "NetworkController"]
+        pcidevices = server_inventory.get('PCIeDevices', server_inventory.get('PCIDevices'))
+        if pcidevices:
+            server_inventory_nics = [item for item in pcidevices if re.match("Network.*Controller", item.get('DeviceClass', ""), re.IGNORECASE)]
 
         elif server_inventory.get('NetworkAdapters') and not server_inventory_nics:
             server_inventory_nics = server_inventory['NetworkAdapters']
