@@ -8,15 +8,15 @@ class CollectorException(Exception):
     pass
 
 class RedfishIventoryCollector(object):
-    def __init__(self, config, target, host, usr, pwd):
+    def __init__(self, timeout, target, ip_address, usr, pwd):
 
         self._target = target
-        self._host = host
+        self.ip_address = ip_address
 
         self._username = usr
         self._password = pwd
 
-        self._timeout = int(os.getenv('TIMEOUT', config['timeout']))
+        self._timeout = int(os.getenv('TIMEOUT', timeout))
         self._response_time = 0
         self._last_http_code = 0
 
@@ -33,17 +33,17 @@ class RedfishIventoryCollector(object):
       
     def get_session(self):
         # Get the url for the server info and messure the response time
-        logging.info(f"Target {self._target}: Connecting to server {self._host}")
+        logging.info(f"  Target {self._target}: Connecting to server {self.ip_address}")
         start_time = time.time()
         server_response = self.connect_server("/redfish/v1", noauth=True)
         self._response_time = round(time.time() - start_time,2)
-        logging.info(f"Target {self._target}: Response time: {self._response_time} seconds.")
+        logging.info(f"  Target {self._target}: Response time: {self._response_time} seconds.")
 
         if server_response:
-            logging.debug(f"Target {self._target}: data received from server {self._host}.")
+            logging.debug(f"  Target {self._target}: data received from server {self.ip_address}.")
             session_service = self.connect_server(server_response['SessionService']['@odata.id'], basic_auth=True)
             if self._last_http_code == 200:
-                sessions_url = f"https://{self._host}{session_service['Sessions']['@odata.id']}"
+                sessions_url = f"https://{self.ip_address}{session_service['Sessions']['@odata.id']}"
                 session_data = {"UserName": self._username, "Password": self._password}
                 self._session.auth = None
                 result = ""
@@ -54,30 +54,30 @@ class RedfishIventoryCollector(object):
                     result.raise_for_status()
 
                 except requests.exceptions.ConnectionError as err:
-                    logging.error(f"Target {self._target}: Error getting an auth token from server {self._host}: {err}")
-                    logging.warning(f"Target {self._target}: Switching to basic authentication.")
+                    logging.error(f"  Target {self._target}: Error getting an auth token from server {self.ip_address}: {err}")
+                    logging.warning(f"  Target {self._target}: Switching to basic authentication.")
                     self._basic_auth = True
 
                 except requests.exceptions.ReadTimeout as err:
-                    logging.warning(f"Target {self._target}: A Read Timeout occured {self._host}: {err}")
+                    logging.warning(f"  Target {self._target}: A Read Timeout occured {self.ip_address}: {err}")
 
 
                 except requests.exceptions.HTTPError as err:
-                    logging.warning(f"Target {self._target}: No session received from server {self._host}: {err}")
-                    logging.warning(f"Target {self._target}: Switching to basic authentication.")
+                    logging.warning(f"  Target {self._target}: No session received from server {self.ip_address}: {err}")
+                    logging.warning(f"  Target {self._target}: Switching to basic authentication.")
                     self._basic_auth = True
 
                 if result:
                     if result.status_code in [200,201]:
                         self._auth_token = result.headers['X-Auth-Token']
                         self._session_url = result.json()['@odata.id']
-                        logging.info(f"Target {self._target}: Got an auth token from server {self._host}!")
+                        logging.info(f"  Target {self._target}: Got an auth token from server {self.ip_address}!")
 
             else:
-                logging.warning(f"Target {self._target}: Failed to get a session from server {self._host}!")
+                logging.warning(f"  Target {self._target}: Failed to get a session from server {self.ip_address}!")
 
         else:
-            logging.warning(f"Target {self._target}: No data received from server {self._host}!")
+            logging.warning(f"  Target {self._target}: No data received from server {self.ip_address}!")
     
     def connect_server(self, command, noauth = False, basic_auth = False):
         logging.captureWarnings(True)
@@ -89,28 +89,28 @@ class RedfishIventoryCollector(object):
         request_duration = 0
         request_start = time.time()
 
-        url = f"https://{self._host}{command}"
+        url = f"https://{self.ip_address}{command}"
 
         # check if we already established a session with the server
         if not self._session:
             self._session = requests.Session()
         else:
-            logging.debug(f"Target {self._target}: Using existing session.")
+            logging.debug(f"  Target {self._target}: Using existing session.")
         self._session.verify = False
         self._session.headers.update({'charset': 'utf-8'})
         self._session.headers.update({'content-type': 'application/json'})
 
         if noauth:
-            logging.debug(f"Target {self._target}: Using no auth")
+            logging.debug(f"  Target {self._target}: Using no auth")
         elif basic_auth or self._basic_auth:
             self._session.auth = (self._username, self._password)
-            logging.debug(f"Target {self._target}: Using basic auth with user {self._username}")
+            logging.debug(f"  Target {self._target}: Using basic auth with user {self._username}")
         else:
-            logging.debug(f"Target {self._target}: Using auth token")
+            logging.debug(f"  Target {self._target}: Using auth token")
             self._session.auth = None
             self._session.headers.update({'X-Auth-Token': self._auth_token})
 
-        logging.debug(f"Target {self._target}: Using URL {url}")
+        logging.debug(f"  Target {self._target}: Using URL {url}")
         try:
             req = self._session.get(url, timeout = self._timeout)
             req.raise_for_status()
@@ -118,22 +118,18 @@ class RedfishIventoryCollector(object):
         except requests.exceptions.HTTPError as err:
             self._last_http_code = err.response.status_code
             if err.response.status_code == 401:
-                logging.error(f"Target {self._target}: Authorization Error: {err}")
+                logging.error(f"  Target {self._target}: Authorization Error: {err}")
             else:
-                logging.error(f"Target {self._target}: HTTP Error: {err}")
+                logging.error(f"  Target {self._target}: HTTP Error: {err}")
 
         except requests.exceptions.ConnectTimeout:
-            logging.error(f"Target {self._target}: Timeout while connecting to {self._host}")
+            logging.error(f"  Target {self._target}: Timeout while connecting to {self.ip_address}")
 
         except requests.exceptions.ReadTimeout:
-            logging.error(f"Target {self._target}: Timeout while reading data from {self._host}")
+            logging.error(f"  Target {self._target}: Timeout while reading data from {self.ip_address}")
 
         except requests.exceptions.ConnectionError as err:
-            logging.error(f"Target {self._target}: Unable to connect to {self._host}: {err}")
-
-        except:
-            logging.error(f"Target {self._target}: Unexpected error: {sys.exc_info()[0]}")
-            logging.error(f"Target {self._target}: URL: {url}")
+            logging.error(f"  Target {self._target}: Unable to connect to {self.ip_address}: {err}")
 
         if req != "":
             self._last_http_code = req.status_code
@@ -141,7 +137,7 @@ class RedfishIventoryCollector(object):
                 req_text = req.json()
 
             except:
-                logging.debug(f"Target {self._target}: No json data received.")
+                logging.debug(f"  Target {self._target}: No json data received.")
 
             # req will evaluate to True if the status code was between 200 and 400 and False otherwise.
             if req:
@@ -150,19 +146,19 @@ class RedfishIventoryCollector(object):
             # if the request fails the server might give a hint in the ExtendedInfo field
             else:
                 if req_text:
-                    logging.debug(f"Target {self._target}: {req_text['error']['code']}: {req_text['error']['message']}")
+                    logging.debug(f"  Target {self._target}: {req_text['error']['code']}: {req_text['error']['message']}")
                     if '@Message.ExtendedInfo' in req_text['error']:
                         if type(req_text['error']['@Message.ExtendedInfo']) == list:
                             if 'Message' in req_text['error']['@Message.ExtendedInfo'][0]:
-                                logging.debug(f"Target {self._target}: {req_text['error']['@Message.ExtendedInfo'][0]['Message']}")
+                                logging.debug(f"  Target {self._target}: {req_text['error']['@Message.ExtendedInfo'][0]['Message']}")
                         elif type(req_text['error']['@Message.ExtendedInfo']) == dict:
                             if 'Message' in req_text['error']['@Message.ExtendedInfo']:
-                                logging.debug(f"Target {self._target}: {req_text['error']['@Message.ExtendedInfo']['Message']}")
+                                logging.debug(f"  Target {self._target}: {req_text['error']['@Message.ExtendedInfo']['Message']}")
                         else:
                             pass
 
         request_duration = round(time.time() - request_start,2)
-        logging.debug(f"Target {self._target}: Request duration: {request_duration}")
+        logging.debug(f"  Target {self._target}: Request duration: {request_duration}")
         return server_response
 
 
@@ -171,14 +167,14 @@ class RedfishIventoryCollector(object):
         systems = self.connect_server("/redfish/v1/Systems")
 
         if not systems:
-            raise CollectorException(f"Target {self._target}: No Systems Info could be retrieved!")
+            raise CollectorException(f"  Target {self._target}: No Systems Info could be retrieved!")
 
         # Get the server info for the labels
         self._urls.update({'Systems': systems['Members'][0]['@odata.id']})
         server_info = self.connect_server(self._urls['Systems'])
 
         if not server_info:
-            logging.warn(f"Target {self._target}: No Server Info could be retrieved!")
+            logging.warn(f"  Target {self._target}: No Server Info could be retrieved!")
             return
 
         fields = ('SKU', 'SerialNumber', 'Manufacturer', 'Model', 'PowerState', 'MemorySummary', 'ProcessorSummary')
@@ -187,7 +183,7 @@ class RedfishIventoryCollector(object):
 
         # get the links of the parts for later
         if type(server_info['Links']['Chassis'][0]) == str:
-            logging.warning(f"Target {self._target}: The Chassis Link is a string! {Manufacturer}/{Model}")
+            logging.warning(f"  Target {self._target}: The Chassis Link is a string!")
             self._urls.update({'Chassis': server_info['Links']['Chassis'][0]})
             self._urls.update({'ManagedBy': server_info['Links']['ManagedBy'][0]})
         else:
@@ -201,7 +197,7 @@ class RedfishIventoryCollector(object):
                 self._urls.update({url: server_info[url]['@odata.id']})
 
     def _get_chassis_urls(self):
-        logging.debug(f"Target {self._target}: Get the Power URLs.")
+        logging.debug(f"  Target {self._target}: Get the Power URLs.")
         chassis_info = self.connect_server(self._urls['Chassis'])
         if chassis_info:
             urls = ('Power', 'PCIeDevices', 'NetworkAdapters')
@@ -216,7 +212,7 @@ class RedfishIventoryCollector(object):
 
     def _get_urls(self, url):
         urls= []
-        logging.debug(f"Target {self._target}: Get the {url} URLs.")
+        logging.debug(f"  Target {self._target}: Get the {url} URLs.")
         collection = self.connect_server(self._urls[url])
         if collection:
             for member in collection['Members']:
@@ -225,7 +221,7 @@ class RedfishIventoryCollector(object):
         return urls            
 
     def _get_storage_info(self, fields):
-        logging.info(f"Target {self._target}: Get the storage data.")
+        logging.info(f"  Target {self._target}: Get the storage data.")
         storage_collection = self.connect_server(self._urls['Storage'])
 
         if storage_collection:
@@ -267,7 +263,7 @@ class RedfishIventoryCollector(object):
                     self._urls['Drives'].append(drive['@odata.id'])
 
     def _get_power_info(self, fields):
-        logging.info(f"Target {self._target}: Get the PSU data.")
+        logging.info(f"  Target {self._target}: Get the PSU data.")
         power_data = self.connect_server(self._urls['Power'])
         if power_data:
             self._inventory.update({'PSU': []})
@@ -276,7 +272,7 @@ class RedfishIventoryCollector(object):
                 self._inventory['PSU'].append(psu_info)
 
     def _get_memory_info(self, urls, fields):
-        logging.info(f"Target {self._target}: Get the Memory data.")
+        logging.info(f"  Target {self._target}: Get the Memory data.")
 
         self._inventory.update({'Memory': []})
         for dimm_url in urls:
@@ -286,13 +282,13 @@ class RedfishIventoryCollector(object):
                 if dimm_info:
                     dimm_info['NetboxName'] = f"RAM {round(self._inventory['MemorySummary']['TotalSystemMemoryGiB'])}GB"
 
-                # HPE has the DIMM Manufacturer in the OEM data
-                if 'Oem' in dimm:
-                    if 'Hpe' in dimm['Oem']:
-                        if dimm['Oem']['Hpe']['DIMMStatus'] != 'NotPresent':
-                            dimm_info.update({'Manufacturer': dimm['Oem']['Hpe'].get('VendorName')})
-                    
-                self._inventory['Memory'].append(dimm_info)
+                    # HPE has the DIMM Manufacturer in the OEM data
+                    if 'Oem' in dimm:
+                        if 'Hpe' in dimm['Oem']:
+                            if dimm['Oem']['Hpe']['DIMMStatus'] != 'NotPresent':
+                                dimm_info.update({'Manufacturer': dimm['Oem']['Hpe'].get('VendorName')})
+                        
+                    self._inventory['Memory'].append(dimm_info)
                 
     def _get_info_from_urls(self, urls, fields=None):
         devices = []
@@ -324,7 +320,7 @@ class RedfishIventoryCollector(object):
 
     def collect(self):
 
-        logging.info(f"Target {self._target}: Collecting data ...")
+        logging.info(f"  Target {self._target}: Collecting data ...")
 
         # Get the Ssystem URLs
         self._get_system_urls()
@@ -333,18 +329,18 @@ class RedfishIventoryCollector(object):
         if 'Chassis' in self._urls:
             self._get_chassis_urls()
         else:
-            logging.warning(f"Target {self._target}: No Chassis URL provided! Cannot get Chassis data!")
+            logging.warning(f"  Target {self._target}: No Chassis URL provided! Cannot get Chassis data!")
 
         # Get the storage data
         if 'Storage' in self._urls:
             fields = ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU')
             self._get_storage_info(fields)
         else:
-            logging.warning(f"Target {self._target}: No Storage URL provided! Cannot get Storage data!")
+            logging.warning(f"  Target {self._target}: No Storage URL provided! Cannot get Storage data!")
 
         # Get the drive data
         if 'Drives' in self._urls:
-            logging.info(f"Target {self._target}: Get the drive data.")
+            logging.info(f"  Target {self._target}: Get the drive data.")
             fields = ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU', 'MediaType', 'CapacityBytes', 'Protocol')
             drives = self._get_info_from_urls(self._urls['Drives'], fields)
 
@@ -356,19 +352,19 @@ class RedfishIventoryCollector(object):
                     elif (drive['Protocol'] == "PCIe" or drive['Protocol'] == "NVMe") and drive['MediaType'] == "SSD":
                         drive['NetboxName'] = f"NVMe {round(drive['CapacityBytes']/1024/1024/1024)}GB"
                     else:
-                        logging.warning(f"Target {self._target}: Unknown Drive Type! Protocol = {drive['Protocol']}, MediaType = {drive['MediaType']}")
+                        logging.warning(f"  Target {self._target}: Unknown Drive Type! Protocol = {drive['Protocol']}, MediaType = {drive['MediaType']}")
                     drives_updated.append(drive)
 
             self._inventory.update({'Drives': drives_updated})
         else:
-            logging.warning(f"Target {self._target}: No Drives URL provided! Cannot get drive data!")
+            logging.warning(f"  Target {self._target}: No Drives URL provided! Cannot get drive data!")
 
         # Get the powersupply data
         if 'Power' in self._urls:
             fields = ('Name', 'Manufacturer', 'Model', 'SerialNumber', 'PartNumber', 'SKU')
             self._get_power_info(fields)
         else:
-            logging.warning(f"Target {self._target}: No Power URL provided! Cannot get PSU data!")
+            logging.warning(f"  Target {self._target}: No Power URL provided! Cannot get PSU data!")
 
         # Get the memory data
         if 'Memory' in self._urls:
@@ -377,14 +373,14 @@ class RedfishIventoryCollector(object):
                 fields = ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU', 'CapacityMiB', 'OperatingSpeedMhz', 'MemoryDeviceType')
                 self._get_memory_info(urls=dimm_urls, fields=fields)
             else:
-                logging.warning(f"Target {self._target}: No DIMM URLs found!")
+                logging.warning(f"  Target {self._target}: No DIMM URLs found!")
 
         else:
-            logging.warning(f"Target {self._target}: No Memory URL provided! Cannot get memory data!")
+            logging.warning(f"  Target {self._target}: No Memory URL provided! Cannot get memory data!")
 
         # Get the processor data
         if 'Processors' in self._urls:
-            logging.info(f"Target {self._target}: Get the CPU data.")
+            logging.info(f"  Target {self._target}: Get the CPU data.")
             proc_urls = self._get_urls('Processors')
             if proc_urls:
                 fields = ('Name', 'Manufacturer', 'Model', 'SerialNumber', 'PartNumber', 'SKU', 'ProcessorType', 'TotalCores', 'TotalThreads')
@@ -397,21 +393,21 @@ class RedfishIventoryCollector(object):
 
                 self._inventory.update({'Processors': processors_updated})
             else:
-                logging.warning(f"Target {self._target}: No Processors found!")
+                logging.warning(f"  Target {self._target}: No Processors found!")
 
         else:
-            logging.warning(f"Target {self._target}: No Processors URL provided! Cannot get Processors data!")
+            logging.warning(f"  Target {self._target}: No Processors URL provided! Cannot get Processors data!")
 
         # HPE provides the NIC info in the Chassis/PCIeDevices
         if 'PCIeDevices' in self._urls:
-            logging.info(f"Target {self._target}: Get the PCIeDevices data.")
+            logging.info(f"  Target {self._target}: Get the PCIeDevices data.")
             if type(self._urls['PCIeDevices']) == list:
                 pcie_urls = self._urls['PCIeDevices']
             else:
                 pcie_urls = self._get_urls('PCIeDevices')
 
             if pcie_urls:
-                fields = ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU', 'Links', 'PCIeFunctions')
+                fields = ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU', 'Links', 'PCIeFunctions', 'Id')
                 pcie_devices = self._get_info_from_urls(pcie_urls, fields=fields)
 
                 pcie_devices_updated = []
@@ -461,14 +457,14 @@ class RedfishIventoryCollector(object):
 
                 self._inventory.update({'PCIeDevices': pcie_devices_updated})
             else:
-                logging.warning(f"Target {self._target}: No PCIe URLs found!")
+                logging.warning(f"  Target {self._target}: No PCIe URLs found!")
 
         else:
-            logging.warning(f"Target {self._target}: No PCIeDevices URL provided!")
+            logging.warning(f"  Target {self._target}: No PCIeDevices URL provided!")
 
         # Dell providess the Nic info in the Chassis/NetworkAdapters
         if 'NetworkAdapters' in self._urls:
-            logging.info(f"Target {self._target}: Get the NetworkAdapters data.")
+            logging.info(f"  Target {self._target}: Get the NetworkAdapters data.")
             nic_urls = self._get_urls('NetworkAdapters')
             if nic_urls:
                 fields = ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU', 'NetworkPorts')
@@ -502,37 +498,37 @@ class RedfishIventoryCollector(object):
 
                 self._inventory.update({'NetworkAdapters': nic_devices_updated})
             else:
-                logging.warning(f"Target {self._target}: No NIC URLs found!")
+                logging.warning(f"  Target {self._target}: No NIC URLs found!")
 
         else:
-            logging.warning(f"Target {self._target}: No NetworkAdapters URL provided!")
+            logging.warning(f"  Target {self._target}: No NetworkAdapters URL provided!")
 
 
         duration = round(time.time() - self._start_time,2)
-        logging.info(f"Target {self._target}: Scrape duration: {duration} seconds")
+        logging.info(f"  Target {self._target}: Scrape duration: {duration} seconds")
 
         return self._inventory
 
     def close_session(self):
 
         if self._auth_token:
-            logging.debug(f"Target {self._target}: Deleting Redfish session with server {self._host}")
-            session_url = f"https://{self._host}{self._session_url}"
+            logging.debug(f"  Target {self._target}: Deleting Redfish session with server {self.ip_address}")
+            session_url = f"https://{self.ip_address}{self._session_url}"
             headers = {'x-auth-token': self._auth_token}
 
-            logging.debug(f"Target {self._target}: Using URL {session_url}")
+            logging.debug(f"  Target {self._target}: Using URL {session_url}")
 
             try:
                 response = requests.delete(session_url, verify=False, timeout=self._timeout, headers=headers)
             except requests.exceptions.ReadTimeout as err:
-                logging.warning(f"Target {self._target}: Failed to delete session with server {self._host}: {err}")
+                logging.warning(f"  Target {self._target}: Failed to delete session with server {self.ip_address}: {err}")
             else:
                 response.close()
-                logging.info(f"Target {self._target}: Redfish Session deleted successfully.")
+                logging.info(f"  Target {self._target}: Redfish Session deleted successfully.")
 
         else:
-            logging.debug(f"Target {self._target}: No Redfish session existing with server {self._host}")
+            logging.debug(f"  Target {self._target}: No Redfish session existing with server {self.ip_address}")
 
         if self._session:
-            logging.info(f"Target {self._target}: Closing requests session.")
+            logging.info(f"  Target {self._target}: Closing requests session.")
             self._session.close()

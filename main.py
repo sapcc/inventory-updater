@@ -12,7 +12,23 @@ import warnings
 import json
 import traceback
 import re
-import pprint
+import time
+
+def get_args():
+    # command line options
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-c", "--config", help="Specify config yaml file", metavar="FILE", required=False, default="config.yml")
+    parser.add_argument(
+        "-s", "--serverlist", help="Specify a text file with a list of servers to examine", metavar="FILE", required=False, default="./serverlist/serverlist.txt")
+    parser.add_argument(
+        "-l", "--logging", help="Log all messages to a file", metavar="FILE", required=False)
+    parser.add_argument(
+        "-d", "--debug", help="Debugging mode", action="store_true", required=False)
+    args = parser.parse_args()
+
+    return args
+
 
 def ConnectLXCA (config):
     usr = os.getenv("LENOVO_USERNAME", config['lenovo_username'])
@@ -44,21 +60,22 @@ def ConnectLXCA (config):
 
 class InventoryCollector(object):
 
-    def __init__(self, config, target):
+    def __init__(self, config, target, server):
         self.config = config
         self.target = target
+        self.server = server
 
         try:
-            ip_address = socket.gethostbyname(remote_board)
+            ip_address = socket.gethostbyname(self.target)
         except socket.gaierror as err:
-            logging.error(f"Server {server}: DNS lookup failed for Remote Board {remote_board}: {err}")
-            raise ValueError(f"Server {server}: DNS lookup failed for Remote Board {remote_board}: {err}")
+            logging.error(f"  Server {server}: DNS lookup failed for Remote Board {self.target}: {err}")
+            raise ValueError(f"  Server {server}: DNS lookup failed for Remote Board {self.target}: {err}")
 
-        self.host = ip_address
+        self.ip_address = ip_address
 
     def redfish(self):
         inventory = {}
-        logging.info(f"Target {self.target}: Collecting using RedFish ...")
+        logging.info(f"  Target {self.target}: Collecting using RedFish ...")
 
         usr = os.getenv("REDFISH_USERNAME", self.config['redfish_username'])
         pwd = os.getenv("REDFISH_PASSWORD", self.config['redfish_password'])
@@ -72,11 +89,11 @@ class InventoryCollector(object):
             exit(1)
 
         server_collector = RedfishIventoryCollector(
-            config,
-            target = self.target,
-            host = self.host,
-            usr = usr,
-            pwd = pwd
+            timeout     = self.config['timeout'],
+            target      = self.target,
+            ip_address  = self.ip_address,
+            usr         = usr,
+            pwd         = pwd
         )
 
         server_collector.get_session()
@@ -120,13 +137,13 @@ class InventoryCollector(object):
         return getattr(self, manufacturer.lower())()
 
 
-def enable_logging():
+def enable_logging(filename, debug):
     # enable logging
     logger = logging.getLogger()
     
     formatter = logging.Formatter('%(asctime)-15s %(process)d %(filename)20s:%(lineno)-3d %(levelname)-7s %(message)s')
 
-    if args.debug:
+    if debug:
         logger.setLevel(logging.DEBUG)
     else:
         logger.setLevel(logging.INFO)
@@ -135,91 +152,109 @@ def enable_logging():
     sh.setFormatter(formatter)
     logger.addHandler(sh)
 
-    if args.logging:
-        fh = logging.FileHandler(args.logging, mode='w')
+    if filename:
+        fh = logging.FileHandler(filename, mode='w')
         fh.setFormatter(formatter)
         logger.addHandler(fh)
 
+def get_config(filename):
+    # get the config
+    try:
+        with open(filename, 'r') as config_file:
+            config =  yaml.load(config_file.read(), Loader=yaml.FullLoader)
+    except FileNotFoundError as e:
+        logging.error(f"Config File not found: {e}")
+        exit(1)
+    return config
+
+def get_serverlist(filename):
+    # get the server list
+    logging.info(f"==> Reading server list {filename}")
+    try:
+        with open(filename, 'r') as serverlist_file:
+            serverlist =  serverlist_file.readlines()
+    except FileNotFoundError as e:
+        logging.error(f"Server File not found: {e}")
+        exit(1)
+    return serverlist
+
+def run_inventory_loop(config):
+
+    try:
+        while True:
+        
+            serverlist = get_serverlist(args.serverlist)
+            for server in serverlist:
+                
+                server = server.replace('\r','').replace('\n','')
+                logging.info(f"==> Server {server}:")
+
+                matches = re.match(server_pattern, server)
+                if not matches:
+                    logging.error(f"  Server {server}: Not matching the naming convention!")
+                    continue
+
+                node, pod, suffix = matches.groups()
+
+                device_name = node + "-" + pod
+                remote_board = node + "r-" + pod + suffix
+
+                updater = NetboxInventoryUpdater(config, device_name)
+
+                manufacturer, model = updater.get_device_model()
+                logging.info(f"  Server {server}: Manufacturer: {manufacturer}, Model: {model}")
+
+                if not manufacturer:
+                    continue
+
+                if config['collect']:
+
+                    logging.info(f"==> Server {server}: Collecting inventory")
+                    try:
+                        collector = InventoryCollector(config, remote_board, server)
+                    # catch DNS errors
+                    except ValueError:
+                        continue
+
+                    inventory = collector.collect(manufacturer)
+
+                    output = json.dumps(inventory, indent=4, sort_keys=True)
+
+                    if args.debug and output and output != "{}":
+                        filename = f"{server}.txt"
+                        output_file = open(filename, 'w')
+                        print(output, file = output_file)
+                        output_file.close()
+
+                if args.debug and os.path.exists(filename):
+                    input_file = open(filename, 'r')
+                    inventory = json.load(input_file)
+                    input_file.close()
+
+                if inventory:
+                    logging.info(f"==> Server {server}: Updating Netbox inventory")
+                    result = updater.update_device_inventory(inventory)
+
+            logging.info(f"==> Sleeping for scrape interval {config['scrape_interval']}")
+            time.sleep(config['scrape_interval'])
+
+    except KeyboardInterrupt:
+        logging.info("Stopping Redfish Prometheus Server")
+        exit()
+
 if __name__ == '__main__':
-    # command line options
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "-c", "--config", help="Specify config yaml file", metavar="FILE", required=False, default="config.yml")
-    parser.add_argument(
-        "-s", "--serverlist", help="Specify a text file with a list of servers to examine", metavar="FILE", required=False, default="serverlist.txt")
-    parser.add_argument(
-        "-l", "--logging", help="Log all messages to a file", metavar="FILE", required=False)
-    parser.add_argument(
-        "-d", "--debug", help="Debugging mode", action="store_true", required=False)
-    args = parser.parse_args()
+
+    args = get_args()
 
     warnings.filterwarnings("ignore")
 
-    enable_logging()
+    enable_logging(args.logging, args.debug)
 
-    # get the config
-    try:
-        with open(args.config, 'r') as config_file:
-            config =  yaml.load(config_file.read(), Loader=yaml.FullLoader)
-    except FileNotFoundError as e:
-        print("Config File not found: {0}".format(e))
-        exit(1)
-
-    # get the server list
-    try:
-        with open(args.serverlist, 'r') as serverlist_file:
-            serverlist =  serverlist_file.readlines()
-    except FileNotFoundError as e:
-        print("Server File not found: {0}".format(e))
-        exit(1)
+    config = get_config(args.config)
 
     server_pattern = re.compile(r"^([a-z]+\d{3})-([a-z]{2,3}\d{3})(\..+)$")
 
     LXCA = ConnectLXCA(config)
+
+    run_inventory_loop(config)
     
-    for server in serverlist:
-        
-        server = server.replace('\r','').replace('\n','')
-        filename = f"{server}.txt"
-
-        matches = re.match(server_pattern, server)
-        if not matches:
-            logging.error(f"Server {server}: Not matching the naming convention!")
-            continue
-
-        node, pod, suffix = matches.groups()
-
-        device_name = node + "-" + pod
-        remote_board = node + "r-" + pod + suffix
-
-        updater = NetboxInventoryUpdater(config, device_name)
-
-        manufacturer, model = updater.get_device_model()
-        logging.info(f"Server {server}: Manufacturer: {manufacturer}, Model: {model}")
-
-        if not manufacturer:
-            continue
-
-        if config['collect']:
-
-            try:
-                collector = InventoryCollector(config, remote_board)
-            # catch DNS errors
-            except ValueError:
-                continue
-
-            inventory = collector.collect(manufacturer)
-
-            output = json.dumps(inventory, indent=4, sort_keys=True)
-
-            if output and output != "{}":
-                output_file = open(filename, 'w')
-                print(output, file = output_file)
-                output_file.close()
-
-        if os.path.exists(filename):
-            input_file = open(filename, 'r')
-            inventory = json.load(input_file)
-            input_file.close()
-
-            result = updater.update_device_inventory(inventory)
