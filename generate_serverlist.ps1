@@ -18,7 +18,7 @@ do {
     $request = Invoke-WebRequest -Uri $uri
     $content = $request.content|ConvertFrom-Json
     foreach ($server in $content.results) {$serverlist += "$($server.name).cc.$($server.site.slug.substring(0,7)).cloud.sap"}
-    $serverlist|Out-File -Append "serverlist_$($region.slug).txt" -Encoding ascii
+    $serverlist|Out-File -Append ".\serverlist\serverlist_$($region.slug).txt" -Encoding ascii
     $uri = $content.next
 } while ($content.next)
 
