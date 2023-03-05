@@ -30,15 +30,15 @@ class NetboxInventoryUpdater(object):
             response.raise_for_status()
         
         except requests.exceptions.HTTPError as err:
-            logging.warning(f"Netbox {self.device_name}: {err}")
+            logging.warning(f"  Netbox {self.device_name}: {err}")
             logging.info(f"Params: {params}")
             logging.info(f"Data: {data}")
             logging.info(f"Response: {response.content}")
 
-        except:
-            logging.warning(f"Netbox {self.device_name}: URL: {url}")
-            logging.exception(traceback.format_exc())
-            exit(1)
+        # except:
+        #     logging.warning(f"  Netbox {self.device_name}: URL: {url}")
+        #     logging.exception(traceback.format_exc())
+        #     exit(1)
 
         if method == "GET":
             if response.json():
@@ -59,10 +59,10 @@ class NetboxInventoryUpdater(object):
             results = self._send_request(url=url, method='GET', params=params)
             
             if len(results) == 0:
-                logging.warn(f"Netbox {self.device_name}: No manufacturer found with {query_manufacturer} in the name! You should consider creating '{manufacturer}'.")
+                logging.warn(f"  Netbox {self.device_name}: No manufacturer found with {query_manufacturer} in the name! You should consider creating '{manufacturer}'.")
 
             elif len(results) > 1:
-                logging.error(f"Netbox {self.device_name}: More than one manufacturer found with name {query_manufacturer}!")
+                logging.error(f"  Netbox {self.device_name}: More than one manufacturer found with name {query_manufacturer}!")
 
             else:
                 return results[0]['id']
@@ -78,11 +78,11 @@ class NetboxInventoryUpdater(object):
         results = self._send_request(url=url, method='GET', params=params)
 
         if len(results) == 0:
-            logging.error(f"Netbox {self.device_name}: No such device found!")
+            logging.error(f"  Netbox {self.device_name}: No such device found!")
             return
         
         elif len(results) > 1:
-            logging.error(f"Netbox {self.device_name}: More than one device found!")
+            logging.error(f"  Netbox {self.device_name}: More than one device found!")
             return
 
         else:
@@ -118,7 +118,7 @@ class NetboxInventoryUpdater(object):
     def remove_inventory_item(self, item):
 
         url = item['url']
-        logging.info(f"Netbox {self.device_name}: Deleting item {item['name']}")
+        logging.info(f"  Netbox {self.device_name}: Deleting item {item['name']}")
         results = self._send_request(url, 'DELETE')
 
     def add_inventory_item(self, item):
@@ -148,10 +148,10 @@ class NetboxInventoryUpdater(object):
 
     def _check_item_amount(self, server_inventory, netbox_inventory):
         if len(netbox_inventory) > len(server_inventory) and len(netbox_inventory) > 0:
-            logging.info(f"Netbox {self.device_name}: Number of Netbox entries for {netbox_inventory[0]['name']} doesn't match:")
-            logging.info(f"Netbox {self.device_name}: Netbox: {len(netbox_inventory) }")
-            logging.info(f"Netbox {self.device_name}: Server: {len(server_inventory) }")
-            logging.info(f"Netbox {self.device_name}: Removing entries ...")
+            logging.info(f"  Netbox {self.device_name}: Number of Netbox entries for {netbox_inventory[0]['name']} doesn't match:")
+            logging.info(f"  Netbox {self.device_name}: Netbox: {len(netbox_inventory) }")
+            logging.info(f"  Netbox {self.device_name}: Server: {len(server_inventory) }")
+            logging.info(f"  Netbox {self.device_name}: Removing entries ...")
             for index in range(len(netbox_inventory) - len(server_inventory)):
                 self.remove_inventory_item(netbox_inventory[index])
                 netbox_inventory.pop(index)
@@ -189,13 +189,13 @@ class NetboxInventoryUpdater(object):
             # no_change = self._compare_dict(new_netbox_item, old_netbox_item)
             # if no_change:
             if new_netbox_item_json == old_netbox_item_json:
-                logging.info(f"Netbox {self.device_name}: No change for {new_netbox_item['name']}")
+                logging.info(f"  Netbox {self.device_name}: No change for {new_netbox_item['name']}")
             else:
                 if current_netbox_item:
-                    logging.info(f"Netbox {self.device_name}: Updating item {new_netbox_item['name']}")
+                    logging.info(f"  Netbox {self.device_name}: Updating item {new_netbox_item['name']}")
                     self.update_inventory_item(new_netbox_item_json, current_netbox_item['id'])
                 else:
-                    logging.info(f"Netbox {self.device_name}: Adding item {new_netbox_item['name']}")
+                    logging.info(f"  Netbox {self.device_name}: Adding item {new_netbox_item['name']}")
                     self.add_inventory_item(new_netbox_item_json)
 
             counter += 1
@@ -236,15 +236,17 @@ class NetboxInventoryUpdater(object):
 
         # PCIeDevices
 
-        # NetworkAdapters
         server_inventory_nics = []
+        server_inventory_gpus = []
         pcidevices = server_inventory.get('PCIeDevices', server_inventory.get('PCIDevices'))
         if pcidevices:
-            server_inventory_nics = [item for item in pcidevices if re.match("Network.*Controller", item.get('DeviceClass', ""), re.IGNORECASE)]
+            server_inventory_nics = [item for item in pcidevices if re.match("NIC.*", item.get('NetboxName', ""), re.IGNORECASE)]
+            server_inventory_gpus = [item for item in pcidevices if re.match("GPU", item.get('NetboxName', ""), re.IGNORECASE) and not re.match("(Embedded|Integrated).*",item['Name'], re.IGNORECASE)]
 
-        elif server_inventory.get('NetworkAdapters') and not server_inventory_nics:
+        if server_inventory.get('NetworkAdapters') and not server_inventory_nics:
             server_inventory_nics = server_inventory['NetworkAdapters']
 
+        # NetworkAdapters
         if server_inventory_nics:
             netbox_inventory_nics = [item for item in netbox_inventory if re.match('.*(NIC|Mellanox|Broadcom|Intel|Pensando).*', item['name'], re.IGNORECASE)]
             netbox_inventory_nics = self._check_item_amount(server_inventory_nics, netbox_inventory_nics)
@@ -253,6 +255,17 @@ class NetboxInventoryUpdater(object):
                 netbox_device_id = netbox_device_id, 
                 server_inventory = server_inventory_nics,
                 netbox_inventory = netbox_inventory_nics
+            )
+
+        # GPUs
+        if server_inventory_gpus:
+            netbox_inventory_gpus = [item for item in netbox_inventory if re.match('.*GPU.*', item['name'], re.IGNORECASE)]
+            netbox_inventory_gpus = self._check_item_amount(server_inventory_gpus, netbox_inventory_gpus)
+
+            self._update_inventory_items(
+                netbox_device_id = netbox_device_id, 
+                server_inventory = server_inventory_gpus,
+                netbox_inventory = netbox_inventory_gpus
             )
 
         # Drives
