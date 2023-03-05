@@ -8,6 +8,9 @@ RUN export DEBIAN_FRONTEND=noninteractive \
 ARG FOLDERNAME=inventory_updater
 
 RUN mkdir /${FOLDERNAME}
+RUN mkdir /${FOLDERNAME}/logs
+RUN mkdir /${FOLDERNAME}/config
+RUN mkdir /${FOLDERNAME}/serverlist
 
 WORKDIR /${FOLDERNAME}
 
@@ -16,6 +19,6 @@ COPY requirements.txt /${FOLDERNAME}
 RUN pip3 install --no-cache-dir -r requirements.txt
 
 COPY *.py /${FOLDERNAME}/
-COPY config.yml /${FOLDERNAME}/
+COPY config/config.yml /${FOLDERNAME}/config/
 
 LABEL source_repository="https://github.com/sapcc/inventory-updater"
