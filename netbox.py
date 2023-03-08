@@ -6,21 +6,24 @@ import traceback
 import re
 import json
 
-class NetboxInventoryUpdater(object):
-    def __init__(self, config, device_name):
-
-        self._netbox_url = os.getenv("NETBOX_URL", config['netbox_url'])
+class NetboxConnection(object):
+    def __init__(self, config):
+        self.netbox_url = os.getenv("NETBOX_URL", config['netbox_url'])
         self._netbox_token = os.getenv("NETBOX_TOKEN", config['netbox_token'])
+        self.netbox_role_id = os.getenv("NETBOX_ROLE_ID", config['netbox_role_id'])
+        self.netbox_tenant_id = os.getenv("NETBOX_TENANT_ID", config['netbox_tenant_id'])
+        self.netbox_device_status = os.getenv("NETBOX_DEVICE_STATUS", config['netbox_device_status'])
 
-        self._netbox_inventory_items_url = f"{self._netbox_url}/api/dcim/inventory-items/"
-        self._netbox_devices_url = f"{self._netbox_url}/api/dcim/devices/"
-        self._netbox_manufacturers_url = f"{self._netbox_url}/api/dcim/manufacturers/"
+        self.netbox_inventory_items_url = f"{self.netbox_url}/api/dcim/inventory-items/"
+        self.netbox_devices_url = f"{self.netbox_url}/api/dcim/devices/"
+        self.netbox_manufacturers_url = f"{self.netbox_url}/api/dcim/manufacturers/"
+        self.netbox_regions_url = f"{config['netbox_url']}/api/dcim/regions/"
+        self.region = os.getenv("REGION", config['region'])
 
         self._headers = {'Content-type': 'application/json', "Authorization": f"Token {self._netbox_token}"}
         self._session = requests.session()
-        self.device_name = device_name
 
-    def _send_request(self, url, method, params=None, data=None):
+    def send_request(self, url, method, params=None, data=None):
 
         req = requests.Request(method=method, url=url, headers=self._headers, params=params, data=data)
         prepped = self._session.prepare_request(req)
@@ -30,19 +33,55 @@ class NetboxInventoryUpdater(object):
             response.raise_for_status()
         
         except requests.exceptions.HTTPError as err:
-            logging.warning(f"  Netbox {self.device_name}: {err}")
-            logging.info(f"Params: {params}")
-            logging.info(f"Data: {data}")
-            logging.info(f"Response: {response.content}")
-
-        # except:
-        #     logging.warning(f"  Netbox {self.device_name}: URL: {url}")
-        #     logging.exception(traceback.format_exc())
-        #     exit(1)
+            logging.warning(f"  Netbox : {err}")
+            logging.info(f"    Params: {params}")
+            logging.info(f"    Data: {data}")
+            logging.info(f"    Response: {response.content}")
 
         if method == "GET":
             if response.json():
-                return response.json().get('results',response.json())
+                return response.json()
+
+    def get_region(self):
+        results = []
+        url = self.netbox_regions_url
+        params = {'q': self.region}
+        results = self.send_request(url=url, method='GET', params=params)['results']
+        if len(results) == 0:
+            logging.warn(f"  Netbox: Region {query_manufacturer} in the name! You should consider creating '{manufacturer}'.")
+
+        elif len(results) > 1:
+            logging.error(f"  Netbox: More than one region found with name {query_manufacturer}!")
+
+        else:
+            return results[0]
+
+    def get_devices(self):
+        devices = []
+        url = self.netbox_devices_url
+        params = {
+            'role_id': self.netbox_role_id,
+            'region_id': self.get_region()['id'],
+            'tenant_id': 1,
+            'exclude': 'config_context',
+            'tag__n': 'no-redfish',
+            'status': self.netbox_device_status
+        }
+
+        page = self.send_request(url=url, method='GET', params=params)
+        devices = page['results']
+        
+        while page['next']:
+            page = self.send_request(url=page['next'], method='GET', params=params)
+            devices.extend(page['results'])
+
+        return devices
+
+class NetboxInventoryUpdater(object):
+    def __init__(self, config, device_name, netbox_connection):
+
+        self.device_name = device_name
+        self.netbox_connection = netbox_connection
 
     def _compare_dict(self, dict1, dict2):
         changes = [k for k, v in dict1.items() if dict2.get(k) != v ]
@@ -52,11 +91,11 @@ class NetboxInventoryUpdater(object):
 
     def get_manufacturer_id(self, manufacturer):
         results = []
-        url = self._netbox_manufacturers_url
+        url = self.netbox_connection.netbox_manufacturers_url
         if manufacturer:
             query_manufacturer = manufacturer.split(" ")[0].replace("(R)","").lower()
             params = {'q': query_manufacturer}
-            results = self._send_request(url=url, method='GET', params=params)
+            results = self.netbox_connection.send_request(url=url, method='GET', params=params)['results']
             
             if len(results) == 0:
                 logging.warn(f"  Netbox {self.device_name}: No manufacturer found with {query_manufacturer} in the name! You should consider creating '{manufacturer}'.")
@@ -71,11 +110,13 @@ class NetboxInventoryUpdater(object):
         server_manufacturer = device['device_type']['manufacturer']['id']
         return server_manufacturer
 
-
     def get_device(self):
-        url = self._netbox_devices_url
-        params = {'name': self.device_name}
-        results = self._send_request(url=url, method='GET', params=params)
+        url = self.netbox_connection.netbox_devices_url
+        params = {
+            'name': self.device_name,
+            'exclude': 'config_context'
+        }
+        results = self.netbox_connection.send_request(url=url, method='GET', params=params)['results']
 
         if len(results) == 0:
             logging.error(f"  Netbox {self.device_name}: No such device found!")
@@ -110,26 +151,26 @@ class NetboxInventoryUpdater(object):
 
     def get_inventory(self):
         
-        url = self._netbox_inventory_items_url
+        url = self.netbox_connection.netbox_inventory_items_url
         params = {'device': self.device_name}
-        results = self._send_request(url=url, method='GET', params=params)
+        results = self.netbox_connection.send_request(url=url, method='GET', params=params)['results']
         return results
 
     def remove_inventory_item(self, item):
 
         url = item['url']
         logging.info(f"  Netbox {self.device_name}: Deleting item {item['name']}")
-        results = self._send_request(url, 'DELETE')
+        results = self.netbox_connection.send_request(url, 'DELETE')
 
     def add_inventory_item(self, item):
 
-        url = self._netbox_inventory_items_url
-        results = self._send_request(url, 'POST', data=item)
+        url = self.netbox_connection.netbox_inventory_items_url
+        results = self.netbox_connection.send_request(url, 'POST', data=item)
 
     def update_inventory_item(self, item, item_id):
 
-        url = self._netbox_inventory_items_url + f"{item_id}/"
-        results = self._send_request(url, 'PATCH', data=item)
+        url = self.netbox_connection.netbox_inventory_items_url + f"{item_id}/"
+        results = self.netbox_connection.send_request(url, 'PATCH', data=item)
 
     def _convert_netbox_inventory(self, item):
         if item:

@@ -17,7 +17,7 @@ class LxcaIventoryCollector(object):
         self._username = usr
         self._password = pwd
 
-        self._timeout = int(os.getenv('TIMEOUT', config['timeout']))
+        self._timeout = int(os.getenv('CONNECTION_TIMEOUT', config['connection_timeout']))
         self._response_time = 0
         self._last_http_code = 0
 

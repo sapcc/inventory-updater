@@ -1,5 +1,5 @@
 from redfish_collector import RedfishIventoryCollector, CollectorException
-from netbox import NetboxInventoryUpdater
+from netbox import NetboxConnection, NetboxInventoryUpdater
 from lenovo_collector import LxcaIventoryCollector
 
 import argparse
@@ -20,15 +20,12 @@ def get_args():
     parser.add_argument(
         "-c", "--config", help="Specify config yaml file", metavar="FILE", required=False, default="config.yml")
     parser.add_argument(
-        "-s", "--serverlist", help="Specify a text file with a list of servers to examine", metavar="FILE", required=False, default="./serverlist/serverlist.txt")
-    parser.add_argument(
-        "-l", "--logging", help="Log all messages to a file", metavar="FILE", required=False)
+        "-l", "--logging", help="Log all messages to a file", metavar="FILE", required=False, default="./logfile.txt")
     parser.add_argument(
         "-d", "--debug", help="Debugging mode", action="store_true", required=False)
     args = parser.parse_args()
 
     return args
-
 
 def ConnectLXCA (config):
     usr = os.getenv("LENOVO_USERNAME", config['lenovo_username'])
@@ -89,7 +86,7 @@ class InventoryCollector(object):
             exit(1)
 
         server_collector = RedfishIventoryCollector(
-            timeout     = self.config['timeout'],
+            timeout     = int(os.getenv('CONNECTION_TIMEOUT', self.config['connection_timeout'])),
             target      = self.target,
             ip_address  = self.ip_address,
             usr         = usr,
@@ -167,23 +164,24 @@ def get_config(filename):
         exit(1)
     return config
 
-def get_serverlist(filename):
-    # get the server list
-    logging.info(f"==> Reading server list {filename}")
-    try:
-        with open(filename, 'r') as serverlist_file:
-            serverlist =  serverlist_file.readlines()
-    except FileNotFoundError as e:
-        logging.error(f"Server File not found: {e}")
-        exit(1)
+def get_serverlist():
+    serverlist = []
+    logging.info(f"==> Retrieving server list from netbox")
+
+    servers = netbox_connection.get_devices()
+    for server in servers:
+        serverlist.append(f"{server['name']}.cc.{server['site']['slug'][:7]}.cloud.sap")
+
+    logging.info(f"  {len(serverlist)} device(s) found.")
     return serverlist
 
 def run_inventory_loop(config):
 
+    scrape_interval = os.getenv('SCRAPE_INTERVAL', config['scrape_interval'])
+
     try:
         while True:
-        
-            serverlist = get_serverlist(args.serverlist)
+            serverlist = get_serverlist()
             for server in serverlist:
                 
                 server = server.replace('\r','').replace('\n','')
@@ -199,7 +197,7 @@ def run_inventory_loop(config):
                 device_name = node + "-" + pod
                 remote_board = node + "r-" + pod + suffix
 
-                updater = NetboxInventoryUpdater(config, device_name)
+                updater = NetboxInventoryUpdater(config, device_name, netbox_connection)
 
                 manufacturer, model = updater.get_device_model()
                 logging.info(f"  Server {server}: Manufacturer: {manufacturer}, Model: {model}")
@@ -207,39 +205,32 @@ def run_inventory_loop(config):
                 if not manufacturer:
                     continue
 
-                if config['collect']:
+                logging.info(f"==> Server {server}: Collecting inventory")
+                try:
+                    collector = InventoryCollector(config, remote_board, server)
+                # catch DNS errors
+                except ValueError:
+                    continue
 
-                    logging.info(f"==> Server {server}: Collecting inventory")
-                    try:
-                        collector = InventoryCollector(config, remote_board, server)
-                    # catch DNS errors
-                    except ValueError:
-                        continue
+                inventory = collector.collect(manufacturer)
 
-                    inventory = collector.collect(manufacturer)
-
-                    output = json.dumps(inventory, indent=4, sort_keys=True)
-
-                    if args.debug and output and output != "{}":
-                        filename = f"{server}.txt"
-                        output_file = open(filename, 'w')
-                        print(output, file = output_file)
-                        output_file.close()
-
-                if args.debug and os.path.exists(filename):
-                    input_file = open(filename, 'r')
-                    inventory = json.load(input_file)
-                    input_file.close()
+                output = json.dumps(inventory, indent=4, sort_keys=True)
+                if args.debug and output and output != "{}":
+                    filename = f"{server}.txt"
+                    logging.info(f"Writing inventory to file {filename}")
+                    output_file = open(filename, 'w')
+                    print(output, file = output_file)
+                    output_file.close()
 
                 if inventory:
                     logging.info(f"==> Server {server}: Updating Netbox inventory")
                     result = updater.update_device_inventory(inventory)
 
-            logging.info(f"==> Sleeping for scrape interval {config['scrape_interval']}")
-            time.sleep(config['scrape_interval'])
+            logging.info(f"==> Sleeping for {scrape_interval} seconds.")
+            time.sleep(scrape_interval)
 
     except KeyboardInterrupt:
-        logging.info("Stopping Redfish Prometheus Server")
+        logging.info("Stopping Inventory Updater")
         exit()
 
 if __name__ == '__main__':
@@ -255,6 +246,8 @@ if __name__ == '__main__':
     server_pattern = re.compile(r"^([a-z]+\d{3})-([a-z]{2,3}\d{3})(\..+)$")
 
     LXCA = ConnectLXCA(config)
+
+    netbox_connection = NetboxConnection(config)
 
     run_inventory_loop(config)
     
