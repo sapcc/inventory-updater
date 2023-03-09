@@ -141,14 +141,6 @@ class LxcaIventoryCollector(object):
             return inventory
 
         inventory.update({"name": target})
-        node_info = dict(sorted(result.items()))
-        output = json.dumps(node_info, indent=4, sort_keys=True)
-
-        if output and output != "{}":
-            filename = f"{target}_lxca.txt"
-            output_file = open(filename, 'w')
-            print(output, file = output_file)
-            output_file.close()
 
         fields = ('serialNumber', 'manufacturer', 'productName', 'powerStatus')
         for field in fields:
