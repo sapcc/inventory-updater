@@ -18,6 +18,5 @@ COPY requirements.txt /${FOLDERNAME}
 RUN pip3 install --no-cache-dir -r requirements.txt
 
 COPY *.py /${FOLDERNAME}/
-COPY config/config.yml /${FOLDERNAME}/config/
 
 LABEL source_repository="https://github.com/sapcc/inventory-updater"
