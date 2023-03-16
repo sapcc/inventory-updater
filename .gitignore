@@ -1,4 +1,3 @@
-*.txt
 .vscode/*
 __pycache__/*
 config/*
