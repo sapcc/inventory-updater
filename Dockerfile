@@ -9,7 +9,6 @@ ARG FOLDERNAME=inventory_updater
 
 RUN mkdir /${FOLDERNAME}
 RUN mkdir /${FOLDERNAME}/logs
-RUN mkdir /${FOLDERNAME}/config
 
 WORKDIR /${FOLDERNAME}
 
