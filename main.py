@@ -18,7 +18,7 @@ def get_args():
     # command line options
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "-c", "--config", help="Specify config yaml file", metavar="FILE", required=False, default="config.yml")
+        "-c", "--config", help="Specify config yaml file", metavar="FILE", required=False, default="config.yaml")
     parser.add_argument(
         "-l", "--logging", help="Log all messages to a file", metavar="FILE", required=False, default="./logfile.txt")
     parser.add_argument(
@@ -36,8 +36,8 @@ def ConnectLXCA (config):
     try:
         ip_address = socket.gethostbyname(console)
     except socket.gaierror as err:
-        logging.error(f"DNS lookup failed for LXCA {console}: {err}")
-        exit(1)
+        logging.warn(f"DNS lookup failed for LXCA {console}: {err}")
+        return
 
     if not usr:
         logging.error("No user found in environment and config file!")
@@ -123,10 +123,10 @@ class InventoryCollector(object):
         return inventory
 
     def lenovo(self):
-        # inventory = self.redfish()
-        # return inventory
-
-        inventory = LXCA.collect(self.target)
+        if LXCA:
+            inventory = LXCA.collect(self.target)
+        else:
+            inventory = self.redfish()
         return inventory
 
     # Defining a function to decide which collection method to call using the manufacturer
@@ -150,7 +150,12 @@ def enable_logging(filename, debug):
     logger.addHandler(sh)
 
     if filename:
-        fh = logging.FileHandler(filename, mode='w')
+        try:
+            fh = logging.FileHandler(filename, mode='w')
+        except FileNotFoundError as e:
+            logging.error(f"Could not open logfile {filename}: {e}")
+            exit(1)
+
         fh.setFormatter(formatter)
         logger.addHandler(fh)
 
