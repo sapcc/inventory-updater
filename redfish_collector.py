@@ -249,7 +249,7 @@ class RedfishIventoryCollector(object):
                 controller_name = controller_details.get('Name', controller_data.get('Name'))
                 if controller_info:
                     if controller_name:
-                        controller_info.update({'Name': controller_name})
+                        controller_info.update({'Name': controller_name.rstrip()})
 
                     # Get the amount of drives attached to the controller
                     if controller_data.get('Drives@odata.count'):
