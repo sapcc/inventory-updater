@@ -182,14 +182,13 @@ class RedfishIventoryCollector(object):
             self._inventory.update({field: server_info.get(field)})
 
         # get the links of the parts for later
-        if type(server_info['Links']['Chassis'][0]) == str:
-            logging.warning(f"  Target {self._target}: The Chassis Link is a string!")
-            self._urls.update({'Chassis': server_info['Links']['Chassis'][0]})
-            self._urls.update({'ManagedBy': server_info['Links']['ManagedBy'][0]})
-        else:
-            for url in server_info['Links'].keys():
-                if type(server_info['Links'][url]) == list and server_info['Links'][url] != []:
-                    self._urls.update({url: server_info['Links'][url][0]['@odata.id']})
+        for link in server_info['Links'].keys():
+            # some Cisco servers have the links as strings
+            if type(server_info['Links'][link]) == str:
+                logging.warning(f"  Target {self._target}: The Link is a string!")
+                self._urls.update({url: server_info['Links'][link][0]})
+            if type(server_info['Links'][link]) == list and server_info['Links'][link] != []:
+                    self._urls.update({link: server_info['Links'][link][0]['@odata.id']})
 
         urls = ('Memory', 'EthernetInterfaces', 'NetworkInterfaces', 'Processors', 'Storage', 'SimpleStorage')
         for url in urls:
