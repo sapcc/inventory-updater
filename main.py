@@ -22,6 +22,8 @@ def get_args():
     parser.add_argument(
         "-l", "--logging", help="Log all messages to a file", metavar="FILE", required=False, default="./logfile.txt")
     parser.add_argument(
+        "-s", "--servers", help="Use a file with a list of servers instead of pulling it from Netbox.", metavar="FILE", required=False)
+    parser.add_argument(
         "-d", "--debug", help="Debugging mode", action="store_true", required=False)
     args = parser.parse_args()
 
@@ -169,13 +171,18 @@ def get_config(filename):
         exit(1)
     return config
 
-def get_serverlist():
+def get_serverlist(config):
     serverlist = []
-    logging.info(f"==> Retrieving server list from netbox")
 
-    servers = netbox_connection.get_devices()
-    for server in servers:
-        serverlist.append(f"{server['name']}.cc.{server['site']['slug'][:7]}.cloud.sap")
+    if config['servers']:
+        logging.info(f"==> Retrieving server list from file {config['servers']}")
+        with open(config['servers'], 'r') as f:
+            serverlist = f.readlines()
+    else:
+        logging.info(f"==> Retrieving server list from netbox")
+        servers = netbox_connection.get_devices()
+        for server in servers:
+            serverlist.append(f"{server['name']}.cc.{server['site']['slug'][:7]}.cloud.sap")
 
     logging.info(f"  {len(serverlist)} device(s) found.")
     return serverlist
@@ -186,7 +193,7 @@ def run_inventory_loop(config):
 
     try:
         while True:
-            serverlist = get_serverlist()
+            serverlist = get_serverlist(config)
             for server in serverlist:
                 
                 server = server.replace('\r','').replace('\n','')
@@ -247,6 +254,8 @@ if __name__ == '__main__':
     enable_logging(args.logging, args.debug)
 
     config = get_config(args.config)
+    if args.servers:
+        config['servers'] = args.servers
 
     server_pattern = re.compile(r"^([a-z]+\d{3})-([a-z]{2,3}\d{3})(\..+)$")
 
