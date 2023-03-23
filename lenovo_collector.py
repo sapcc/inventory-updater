@@ -122,7 +122,8 @@ class LxcaIventoryCollector(object):
         if result:
             if len(result) > 1:
                 logging.warning(f"Target {target}: More than one Node found in LXCA!")
-                logging.warning(result)
+                for node in result:
+                    logging.warning(node['name'])
                 return
 
             logging.info(f"Target {target}: Node found in LXCA with name {result[0]['name']}!")
