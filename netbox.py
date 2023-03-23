@@ -33,10 +33,10 @@ class NetboxConnection(object):
             response.raise_for_status()
         
         except requests.exceptions.HTTPError as err:
-            logging.warning(f"  Netbox : {err}")
-            logging.info(f"    Params: {params}")
-            logging.info(f"    Data: {data}")
-            logging.info(f"    Response: {response.content}")
+            logging.error(f"  Netbox : {err}: {response.content}")
+            logging.debug(f"    Params: {params}")
+            logging.debug(f"    Data: {data}")
+            logging.debug(f"    Response: {response.content}")
 
         if method == "GET":
             if response.json():
@@ -46,12 +46,12 @@ class NetboxConnection(object):
         results = []
         url = self.netbox_regions_url
         params = {'q': self.region}
-        results = self.send_request(url=url, method='GET', params=params)['results']
-        if len(results) == 0:
-            logging.warn(f"  Netbox: Region {query_manufacturer} in the name! You should consider creating '{manufacturer}'.")
-
-        elif len(results) > 1:
-            logging.error(f"  Netbox: More than one region found with name {query_manufacturer}!")
+        response = self.send_request(url=url, method='GET', params=params)
+        results = response.get('results')
+        
+        if not results:
+            logging.error(f"  Netbox: Region {self.region} not found: {response['detail']}")
+            exit(1)
 
         else:
             return results[0]
