@@ -136,8 +136,8 @@ class LxcaIventoryCollector(object):
         inventory = {}
         logging.info(f"Target {target}: Collecting data ...")
 
-        result = self.get_node(target)
-        if not result:
+        node_info = self.get_node(target)
+        if not node_info:
             return inventory
 
         inventory.update({"name": target})
