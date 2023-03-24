@@ -174,7 +174,7 @@ def get_config(filename):
 def get_serverlist(config):
     serverlist = []
 
-    if config['servers']:
+    if config.get('servers'):
         logging.info(f"==> Retrieving server list from file {config['servers']}")
         with open(config['servers'], 'r') as f:
             serverlist = f.readlines()
