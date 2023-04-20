@@ -257,7 +257,7 @@ if __name__ == '__main__':
     if args.servers:
         config['servers'] = args.servers
 
-    server_pattern = re.compile(r"^([a-z]+\d{3})-([a-z]{2,3}\d{3})(\..+)$")
+    server_pattern = re.compile(r"^([a-z]+\d{2,3})-([a-z]{2,3}\d{3})(\..+)$")
 
     LXCA = ConnectLXCA(config)
 
