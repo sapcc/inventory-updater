@@ -179,7 +179,7 @@ def get_serverlist(config):
         with open(config['servers'], 'r') as f:
             serverlist = f.readlines()
     else:
-        logging.info(f"==> Retrieving server list from netbox")
+        logging.info(f"==> Retrieving server list from {netbox_connection.netbox_url}")
         servers = netbox_connection.get_devices()
         for server in servers:
             serverlist.append(f"{server['name']}.cc.{server['site']['slug'][:7]}.cloud.sap")
