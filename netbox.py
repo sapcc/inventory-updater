@@ -20,6 +20,7 @@ class NetboxConnection(object):
         self.netbox_regions_url = f"{config['netbox_url']}/api/dcim/regions/"
         self.region = os.getenv("REGION", config['region'])
 
+        logging.info(f"Establishing connection to Netbox {self.netbox_url}")
         self._headers = {'Content-type': 'application/json', "Authorization": f"Token {self._netbox_token}"}
         self._session = requests.session()
 
