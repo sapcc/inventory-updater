@@ -13,6 +13,7 @@ import json
 import traceback
 import re
 import time
+import gc
 
 def get_args():
     # command line options
@@ -34,6 +35,8 @@ def ConnectLXCA (config):
     pwd = os.getenv("LENOVO_PASSWORD", config['lenovo_password'])
     region = os.getenv("REGION", config['region'])
     console = os.getenv("LENOVO_CONSOLE", config['lenovo_console']).replace("<region>", region)
+
+    logging.info(f"Establishing connection to LXCA {console} ...")
 
     try:
         ip_address = socket.gethostbyname(console)
@@ -59,10 +62,11 @@ def ConnectLXCA (config):
 
 class InventoryCollector(object):
 
-    def __init__(self, config, target, server):
+    def __init__(self, config, target, server, LXCA):
         self.config = config
         self.target = target
         self.server = server
+        self.LXCA   = LXCA
 
         try:
             ip_address = socket.gethostbyname(self.target)
@@ -125,8 +129,9 @@ class InventoryCollector(object):
         return inventory
 
     def lenovo(self):
-        if LXCA:
-            inventory = LXCA.collect(self.target)
+
+        if self.LXCA:
+            inventory = self.LXCA.collect(self.target)
         else:
             inventory = self.redfish()
         return inventory
@@ -193,7 +198,9 @@ def run_inventory_loop(config):
 
     try:
         while True:
-            serverlist = get_serverlist(config)
+            serverlist = get_serverlist(config) # Get the list of servers to check
+            LXCA = ConnectLXCA(config)
+
             for server in serverlist:
                 
                 server = server.replace('\r','').replace('\n','')
@@ -212,14 +219,14 @@ def run_inventory_loop(config):
                 updater = NetboxInventoryUpdater(config, device_name, netbox_connection)
 
                 manufacturer, model = updater.get_device_model()
-                logging.info(f"  Server {server}: Manufacturer: {manufacturer}, Model: {model}")
+                logging.info(f"  Server {server}: Model: {manufacturer} {model}")
 
                 if not manufacturer:
                     continue
 
                 logging.info(f"==> Server {server}: Collecting inventory")
                 try:
-                    collector = InventoryCollector(config, remote_board, server)
+                    collector = InventoryCollector(config, remote_board, server, LXCA)
                 # catch DNS errors
                 except ValueError:
                     continue
@@ -233,11 +240,16 @@ def run_inventory_loop(config):
                     output_file = open(filename, 'w')
                     print(output, file = output_file)
                     output_file.close()
+                    del output
 
                 if inventory:
                     logging.info(f"==> Server {server}: Updating Netbox inventory")
                     result = updater.update_device_inventory(inventory)
+                    del inventory
 
+            del serverlist
+            del collector
+            gc.collect()
             logging.info(f"==> Sleeping for {scrape_interval} seconds.")
             time.sleep(scrape_interval)
 
@@ -258,8 +270,6 @@ if __name__ == '__main__':
         config['servers'] = args.servers
 
     server_pattern = re.compile(r"^([a-z]+\d{2,3})-([a-z]{2,3}\d{3})(\..+)$")
-
-    LXCA = ConnectLXCA(config)
 
     netbox_connection = NetboxConnection(config)
 
