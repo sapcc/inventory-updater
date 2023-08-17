@@ -186,9 +186,13 @@ class RedfishIventoryCollector(object):
             # some Cisco servers have the links as strings
             if type(server_info['Links'][link]) == str:
                 logging.warning(f"  Target {self._target}: The Link is a string!")
-                self._urls.update({url: server_info['Links'][link][0]})
+                self._urls.update({link: server_info['Links'][link][0]})
             if type(server_info['Links'][link]) == list and server_info['Links'][link] != []:
-                    self._urls.update({link: server_info['Links'][link][0]['@odata.id']})
+                    if type(server_info['Links'][link][0]) == str:
+                        url = server_info['Links'][link][0]
+                    else:
+                        url = server_info['Links'][link][0]['@odata.id']
+                    self._urls.update({link: url})
 
         urls = ('Memory', 'EthernetInterfaces', 'NetworkInterfaces', 'Processors', 'Storage', 'SimpleStorage')
         for url in urls:
@@ -207,7 +211,11 @@ class RedfishIventoryCollector(object):
                 elif url in chassis_info['Links'] and chassis_info['Links'][url] != []:
                     self._urls.update({url: []})
                     for entry in chassis_info['Links'][url]:
-                        self._urls[url].append(entry['@odata.id'])
+                        if type(entry) == str:
+                            link = entry
+                        else:
+                            link = entry['@odata.id']
+                        self._urls[url].append(link)
 
     def _get_urls(self, url):
         urls= []
@@ -382,11 +390,11 @@ class RedfishIventoryCollector(object):
             logging.info(f"  Target {self._target}: Get the CPU data.")
             proc_urls = self._get_urls('Processors')
             if proc_urls:
-                fields = ('Name', 'Manufacturer', 'Model', 'SerialNumber', 'PartNumber', 'SKU', 'ProcessorType', 'TotalCores', 'TotalThreads')
+                fields = ('Name', 'Manufacturer', 'Model', 'SerialNumber', 'PartNumber', 'SKU', 'ProcessorType', 'TotalCores', 'TotalThreads', 'Description')
                 processors = self._get_info_from_urls(proc_urls, fields)
                 processors_updated = []
                 for processor in processors:
-                    processor['Description'] = processor['Model']
+                    processor['Description'] = processor['Model'] if processor['Model'] else processor['Description']
                     processor['NetboxName'] = f"CPU {processor['TotalCores']}C"
                     processors_updated.append(processor)
 
