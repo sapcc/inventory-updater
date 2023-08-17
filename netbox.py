@@ -8,16 +8,14 @@ import json
 
 class NetboxConnection(object):
     def __init__(self, config):
-        self.netbox_url = os.getenv("NETBOX_URL", config['netbox_url'])
-        self._netbox_token = os.getenv("NETBOX_TOKEN", config['netbox_token'])
-        self.netbox_role_id = os.getenv("NETBOX_ROLE_ID", config['netbox_role_id'])
-        self.netbox_tenant_id = os.getenv("NETBOX_TENANT_ID", config['netbox_tenant_id'])
-        self.netbox_device_status = os.getenv("NETBOX_DEVICE_STATUS", config['netbox_device_status'])
+        self.netbox_url = os.getenv("NETBOX_URL", config['netbox']['url'])
+        self._netbox_token = os.getenv("NETBOX_TOKEN", config['netbox']['token'])
+        self.netbox_query = os.getenv("NETBOX_QUERY", config['netbox']['query'])
 
         self.netbox_inventory_items_url = f"{self.netbox_url}/api/dcim/inventory-items/"
         self.netbox_devices_url = f"{self.netbox_url}/api/dcim/devices/"
         self.netbox_manufacturers_url = f"{self.netbox_url}/api/dcim/manufacturers/"
-        self.netbox_regions_url = f"{config['netbox_url']}/api/dcim/regions/"
+        self.netbox_regions_url = f"{self.netbox_url}/api/dcim/regions/"
         self.region = os.getenv("REGION", config['region'])
 
         logging.info(f"Establishing connection to Netbox {self.netbox_url}")
@@ -61,13 +59,10 @@ class NetboxConnection(object):
         devices = []
         url = self.netbox_devices_url
         params = {
-            'role_id': self.netbox_role_id,
             'region_id': self.get_region()['id'],
-            'tenant_id': 1,
-            'exclude': 'config_context',
-            'tag__n': 'no-redfish',
-            'status': self.netbox_device_status
+            'exclude': 'config_context'
         }
+        params.update(self.netbox_query)
 
         page = self.send_request(url=url, method='GET', params=params)
         devices = page['results']
@@ -265,8 +260,15 @@ class NetboxInventoryUpdater(object):
         # We only write one Entry for all DIMMs with the total RAM capacity in the name
         if server_inventory.get('Memory'):
             server_inventory_memory = [server_inventory['Memory'][0]]
+
+            dimm_capacity = round(int(server_inventory_memory[0]['CapacityMiB'])/1024)
+            dimm_type = server_inventory_memory[0]['MemoryDeviceType']
+            dimm_speed = server_inventory_memory[0]['OperatingSpeedMhz']
+            dimm_manufacturer = server_inventory_memory[0]['Manufacturer']
+            num_dimms = len(server_inventory['Memory'])
+
             # Put the description together from several parts of the DIMM information
-            server_inventory_memory[0]['Description'] = f"{len(server_inventory['Memory'])}x {round(server_inventory_memory[0]['CapacityMiB']/1024)}GB {server_inventory_memory[0]['MemoryDeviceType']} {server_inventory_memory[0]['OperatingSpeedMhz']}MT/s {server_inventory_memory[0]['Manufacturer']}"
+            server_inventory_memory[0]['Description'] = f"{num_dimms}x {dimm_capacity}GB {dimm_type} {dimm_speed}MT/s {dimm_manufacturer}"
             netbox_inventory_memory = [item for item in netbox_inventory if re.match('.*RAM.*', item['name'], re.IGNORECASE)]
             netbox_inventory_memory = self._check_item_amount(server_inventory_memory, netbox_inventory_memory)
 
