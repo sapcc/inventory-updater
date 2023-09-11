@@ -342,6 +342,20 @@ class NetboxInventoryUpdater(object):
                     netbox_inventory = netbox_inventory_nvme
                 )
 
+            # HDD
+            server_inventory_hdd = [item for item in server_inventory['Drives'] if item['Protocol'] == "SAS" and item['MediaType'] == "HDD"]
+
+            if server_inventory_hdd:
+                netbox_inventory_hdd = [item for item in netbox_inventory if re.match('.*(HDD).*', item['name'], re.IGNORECASE)]
+                netbox_inventory_hdd = self._check_item_amount(server_inventory_hdd, netbox_inventory_hdd)
+
+                self._update_inventory_items(
+                    netbox_device_id = netbox_device_id, 
+                    #new_netbox_item_name = new_netbox_item_name, 
+                    server_inventory = server_inventory_hdd,
+                    netbox_inventory = netbox_inventory_hdd
+                )
+
         # Controllers
         if server_inventory.get('Controllers'):
             
