@@ -1,6 +1,5 @@
 from redfish_collector import RedfishIventoryCollector, CollectorException
 from netbox import NetboxConnection, NetboxInventoryUpdater
-from lenovo_collector import LxcaIventoryCollector
 
 import argparse
 import yaml
@@ -30,43 +29,12 @@ def get_args():
 
     return args
 
-def ConnectLXCA (config):
-    usr = os.getenv("LENOVO_USERNAME", config['lenovo_username'])
-    pwd = os.getenv("LENOVO_PASSWORD", config['lenovo_password'])
-    region = os.getenv("REGION", config['region'])
-    console = os.getenv("LENOVO_CONSOLE", config['lenovo_console']).replace("<region>", region)
-
-    logging.info(f"Establishing connection to LXCA {console} ...")
-
-    try:
-        ip_address = socket.gethostbyname(console)
-    except socket.gaierror as err:
-        logging.warn(f"DNS lookup failed for LXCA {console}: {err}")
-        return
-
-    if not usr:
-        logging.error("No user found in environment and config file!")
-        exit(1)
-
-    if not pwd:
-        logging.error("No password found in environment and config file!")
-        exit(1)
-
-    return LxcaIventoryCollector(
-            config,
-            console = ip_address,
-            usr = usr,
-            pwd = pwd
-        )
-
-
 class InventoryCollector(object):
 
-    def __init__(self, config, target, server, LXCA):
+    def __init__(self, config, target, server):
         self.config = config
         self.target = target
         self.server = server
-        self.LXCA   = LXCA
 
         try:
             ip_address = socket.gethostbyname(self.target)
@@ -129,11 +97,7 @@ class InventoryCollector(object):
         return inventory
 
     def lenovo(self):
-
-        if self.LXCA:
-            inventory = self.LXCA.collect(self.target)
-        else:
-            inventory = self.redfish()
+        inventory = self.redfish()
         return inventory
 
     # Defining a function to decide which collection method to call using the manufacturer
@@ -181,8 +145,12 @@ def get_serverlist(config):
 
     if config.get('servers'):
         logging.info(f"==> Retrieving server list from file {config['servers']}")
-        with open(config['servers'], 'r') as f:
-            serverlist = f.readlines()
+        try:
+            with open(config['servers'], 'r') as f:
+                serverlist = f.readlines()
+        except FileNotFoundError as e:
+            logging.error(f"Serverlist File not found: {e}")
+            exit(1)
     else:
         logging.info(f"==> Retrieving server list from {netbox_connection.netbox_url}")
         servers = netbox_connection.get_devices()
@@ -199,7 +167,6 @@ def run_inventory_loop(config):
     try:
         while True:
             serverlist = get_serverlist(config) # Get the list of servers to check
-            LXCA = ConnectLXCA(config)
 
             for server in serverlist:
                 
@@ -226,7 +193,7 @@ def run_inventory_loop(config):
 
                 logging.info(f"==> Server {server}: Collecting inventory")
                 try:
-                    collector = InventoryCollector(config, remote_board, server, LXCA)
+                    collector = InventoryCollector(config, remote_board, server)
                 # catch DNS errors
                 except ValueError:
                     continue

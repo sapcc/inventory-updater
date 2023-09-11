@@ -8,6 +8,38 @@ import time
 import sys
 import re
 import json
+import socket
+
+
+def ConnectLXCA (config):
+    usr = os.getenv("LENOVO_USERNAME", config['lenovo_username'])
+    pwd = os.getenv("LENOVO_PASSWORD", config['lenovo_password'])
+    region = os.getenv("REGION", config['region'])
+    console = os.getenv("LENOVO_CONSOLE", config['lenovo_console']).replace("<region>", region)
+
+    logging.info(f"Establishing connection to LXCA {console} ...")
+
+    try:
+        ip_address = socket.gethostbyname(console)
+    except socket.gaierror as err:
+        logging.warn(f"DNS lookup failed for LXCA {console}: {err}")
+        return
+
+    if not usr:
+        logging.error("No user found in environment and config file!")
+        exit(1)
+
+    if not pwd:
+        logging.error("No password found in environment and config file!")
+        exit(1)
+
+    return LxcaIventoryCollector(
+            config,
+            console = ip_address,
+            usr = usr,
+            pwd = pwd
+        )
+
 
 class LxcaIventoryCollector(object):
     def __init__(self, config, console, usr, pwd):
