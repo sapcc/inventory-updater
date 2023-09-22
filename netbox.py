@@ -236,8 +236,6 @@ class NetboxInventoryUpdater(object):
                     self.add_inventory_item(new_netbox_item_json)
 
             counter += 1
-                
-
 
     def update_device_inventory(self, server_inventory):
 

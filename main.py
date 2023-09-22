@@ -171,7 +171,7 @@ def run_inventory_loop(config):
             for server in serverlist:
                 
                 server = server.replace('\r','').replace('\n','')
-                logging.info(f"==> Server {server}:")
+                logging.info(f"==> Server {server}")
 
                 matches = re.match(server_pattern, server)
                 if not matches:
