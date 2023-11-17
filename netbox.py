@@ -140,6 +140,10 @@ class NetboxInventoryUpdater(object):
         netbox_device = self.get_device()
         return netbox_device['id']
 
+    def get_device_status(self):
+        netbox_device = self.get_device()
+        return netbox_device['status']['value']
+
     def get_device_region(self):
         netbox_device = self.get_device()
         matches = re.match(r'^(\w{2}-\w{2}-\d{1})[a-z]$', netbox_device['site']['slug'])
