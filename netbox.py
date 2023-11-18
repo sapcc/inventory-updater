@@ -1,8 +1,6 @@
 import requests
 import logging
 import os
-import sys
-import traceback
 import re
 import json
 
