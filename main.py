@@ -221,7 +221,7 @@ def run_inventory_loop(config):
             time.sleep(scrape_interval)
 
     except KeyboardInterrupt:
-        logging.info("Stopping Inventory Updater")
+        logging.info("Keyboard Interrupt. Stopping Inventory Updater...")
         exit()
 
 if __name__ == '__main__':
