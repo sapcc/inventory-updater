@@ -1,8 +1,7 @@
 import requests
 import logging
-import os
 import time
-import sys
+import re
 
 class CollectorException(Exception):
     pass
@@ -356,7 +355,7 @@ class RedfishIventoryCollector(object):
                 if drive['CapacityBytes'] > 0:
                     if (drive['Protocol'] == "SATA" or drive['Protocol'] == "SAS") and (drive['MediaType'] == "SSD" or drive['MediaType'] == "HDD"):
                         drive['NetboxName'] = f"{drive['MediaType']} {round(drive['CapacityBytes']/1024/1024/1024)}GB"
-                    elif (drive['Protocol'] == "PCIe" or drive['Protocol'] == "NVMe") and drive['MediaType'] == "SSD":
+                    elif ((drive['Protocol'] == "PCIe" or drive['Protocol'] == "NVMe") and drive['MediaType'] == "SSD") or re.match(r'^.*NVMe.*$', drive['Name']) :
                         drive['NetboxName'] = f"NVMe {round(drive['CapacityBytes']/1024/1024/1024)}GB"
                     else:
                         logging.warning(f"  Target {self._target}: Unknown Drive Type! Protocol = {drive['Protocol']}, MediaType = {drive['MediaType']}")
