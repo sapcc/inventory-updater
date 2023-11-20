@@ -193,7 +193,7 @@ class RedfishIventoryCollector(object):
                         url = server_info['Links'][link][0]['@odata.id']
                     self._urls.update({link: url})
 
-        urls = ('Memory', 'EthernetInterfaces', 'NetworkInterfaces', 'Processors', 'Storage', 'SimpleStorage')
+        urls = ('Memory', 'EthernetInterfaces', 'NetworkInterfaces', 'Processors', 'Storage')
         for url in urls:
             if url in server_info:
                 self._urls.update({url: server_info[url]['@odata.id']})
