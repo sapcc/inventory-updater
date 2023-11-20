@@ -53,9 +53,16 @@ class RedfishIventoryCollector(object):
                     result.raise_for_status()
 
                 except requests.exceptions.ConnectionError as err:
-                    logging.error(f"  Target {self._target}: Error getting an auth token from server {self.ip_address}: {err}")
-                    logging.warning(f"  Target {self._target}: Switching to basic authentication.")
-                    self._basic_auth = True
+                    logging.warning(f"  Target {self._target}: Failed to get an auth token from server {self.ip_address}. Retrying ...")
+                    try:
+                        result = self._session.post(
+                            sessions_url, json=session_data, verify=False, timeout=self._timeout
+                        )
+                        result.raise_for_status()
+
+                    except requests.exceptions.ConnectionError as err:
+                        logging.error(f"  Target {self._target}: Error getting an auth token from server {self.ip_address}: {err}")
+                        self._basic_auth = True
 
                 except requests.exceptions.ReadTimeout as err:
                     logging.warning(f"  Target {self._target}: A Read Timeout occured {self.ip_address}: {err}")
@@ -114,21 +121,17 @@ class RedfishIventoryCollector(object):
             req = self._session.get(url, timeout = self._timeout)
             req.raise_for_status()
 
-        except requests.exceptions.HTTPError as err:
-            self._last_http_code = err.response.status_code
-            if err.response.status_code == 401:
-                logging.error(f"  Target {self._target}: Authorization Error: {err}")
-            else:
-                logging.error(f"  Target {self._target}: HTTP Error: {err}")
-
-        except requests.exceptions.ConnectTimeout:
-            logging.error(f"  Target {self._target}: Timeout while connecting to {self.ip_address}")
-
-        except requests.exceptions.ReadTimeout:
-            logging.error(f"  Target {self._target}: Timeout while reading data from {self.ip_address}")
-
         except requests.exceptions.ConnectionError as err:
-            logging.error(f"  Target {self._target}: Unable to connect to {self.ip_address}: {err}")
+            logging.warn(f"  Target {self._target}: Connection Error with {self.ip_address}. Retrying ...")
+            try:
+                req = self._session.get(url, timeout = self._timeout)
+                req.raise_for_status()
+            except requests.exceptions.ConnectionError as err:
+                logging.error(f"  Target {self._target}: Unable to connect to {self.ip_address}: {err}")
+
+        except requests.exceptions.RequestException as err:
+            logging.error(f"  Target {self._target}: Unable to connect to {err.response.url}: Status Code {err.response.status_code}")
+            logging.error(f"  Target {self._target}: {err.response.text}")
 
         if req != "":
             self._last_http_code = req.status_code
