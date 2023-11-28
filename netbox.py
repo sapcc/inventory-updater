@@ -35,6 +35,9 @@ class NetboxConnection(object):
             logging.debug(f"    Data: {data}")
             logging.debug(f"    Response: {response.content}")
 
+        except requests.exceptions.ConnectionError as err:
+            logging.error(f"  Netbox : {err}: {response.content}")
+
         if method == "GET":
             if response.json():
                 return response.json()
