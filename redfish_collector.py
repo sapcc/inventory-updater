@@ -148,16 +148,20 @@ class RedfishIventoryCollector(object):
             # if the request fails the server might give a hint in the ExtendedInfo field
             else:
                 if req_text:
-                    logging.debug(f"  Target {self._target}: {req_text['error']['code']}: {req_text['error']['message']}")
-                    if '@Message.ExtendedInfo' in req_text['error']:
-                        if type(req_text['error']['@Message.ExtendedInfo']) == list:
-                            if 'Message' in req_text['error']['@Message.ExtendedInfo'][0]:
-                                logging.debug(f"  Target {self._target}: {req_text['error']['@Message.ExtendedInfo'][0]['Message']}")
-                        elif type(req_text['error']['@Message.ExtendedInfo']) == dict:
-                            if 'Message' in req_text['error']['@Message.ExtendedInfo']:
-                                logging.debug(f"  Target {self._target}: {req_text['error']['@Message.ExtendedInfo']['Message']}")
-                        else:
-                            pass
+                    if "error" in req_text:
+                        logging.debug(f"  Target {self._target}: {req_text['error']['code']}: {req_text['error']['message']}")
+                        if '@Message.ExtendedInfo' in req_text['error']:
+                            if type(req_text['error']['@Message.ExtendedInfo']) == list:
+                                if 'Message' in req_text['error']['@Message.ExtendedInfo'][0]:
+                                    logging.debug(f"  Target {self._target}: {req_text['error']['@Message.ExtendedInfo'][0]['Message']}")
+                            elif type(req_text['error']['@Message.ExtendedInfo']) == dict:
+                                if 'Message' in req_text['error']['@Message.ExtendedInfo']:
+                                    logging.debug(f"  Target {self._target}: {req_text['error']['@Message.ExtendedInfo']['Message']}")
+                            else:
+                                pass
+                    # workaround for Cisco UCSC-C480-M5 returning a 503 but still delivering the data
+                    else:
+                        server_response = req_text
 
         request_duration = round(time.time() - request_start,2)
         logging.debug(f"  Target {self._target}: Request duration: {request_duration}")
