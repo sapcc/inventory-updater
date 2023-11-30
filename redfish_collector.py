@@ -130,8 +130,11 @@ class RedfishIventoryCollector(object):
                 logging.error(f"  Target {self._target}: Unable to connect to {self.ip_address}: {err}")
 
         except requests.exceptions.RequestException as err:
-            logging.error(f"  Target {self._target}: Unable to connect to {err.response.url}: Status Code {err.response.status_code}")
-            logging.error(f"  Target {self._target}: {err.response.text}")
+            if err.response:
+                logging.error(f"  Target {self._target}: Unable to connect to {err.response.url}: Status Code {err.response.status_code}")
+                logging.error(f"  Target {self._target}: {err.response.text}")
+            else:
+                logging.error(f"  Target {self._target}: Unable to connect: {err}")
 
         if req != "":
             self._last_http_code = req.status_code
@@ -475,17 +478,18 @@ class RedfishIventoryCollector(object):
         else:
             logging.warning(f"  Target {self._target}: No PCIeDevices URL provided!")
 
-        # Dell providess the Nic info in the Chassis/NetworkAdapters
+        # Dell and HPE Gen11 provide the Nic info in the Chassis/NetworkAdapters
         if 'NetworkAdapters' in self._urls:
             logging.info(f"  Target {self._target}: Get the NetworkAdapters data.")
             nic_urls = self._get_urls('NetworkAdapters')
             if nic_urls:
-                fields = ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU', 'NetworkPorts')
+                fields = ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU', 'NetworkPorts', 'Ports')
                 nic_devices = self._get_info_from_urls(nic_urls, fields)
                 nic_devices_updated = []
                 for nic in nic_devices:
                     port_speed = 0
-                    nic_ports_url = nic.get('NetworkPorts')
+                    # HPE Gen11 Calls it 'Ports'
+                    nic_ports_url = nic['NetworkPorts'] if nic['NetworkPorts'] else nic.get('Ports')
                     if nic_ports_url:
                         nic['Ports'] = []
                         self._urls['NetworkPorts'] = nic_ports_url['@odata.id']
@@ -503,7 +507,18 @@ class RedfishIventoryCollector(object):
                             if current_port_speed > port_speed:
                                 port_speed = current_port_speed
                             
-                            nic['Ports'].append({'PortSpeed': current_port_speed, 'MAC': port_info['AssociatedNetworkAddresses']})
+                            # HPE Gen11, Lenovo v3
+                            if 'Ethernet' in port_info:
+                                if type(port_info['Ethernet']['AssociatedMACAddresses']) == list:
+                                    port_mac = port_info['Ethernet']['AssociatedMACAddresses'][0]
+                                else:
+                                    port_mac = port_info['Ethernet']['AssociatedMACAddresses']
+                            
+                            # Dell R750xd
+                            else:
+                                port_mac = port_info.get('AssociatedNetworkAddresses')
+
+                            nic['Ports'].append({'PortSpeed': current_port_speed, 'MAC': port_mac})
                             
                     nic['NetboxName'] = f"NIC {port_speed}Gb" if port_speed else "NIC"
                     nic.pop('NetworkPorts')
