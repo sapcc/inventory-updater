@@ -288,6 +288,7 @@ class NetboxInventoryUpdater(object):
         pcidevices = server_inventory.get('PCIeDevices', server_inventory.get('PCIDevices'))
         if pcidevices:
             server_inventory_nics = [item for item in pcidevices if re.match("NIC.*", item.get('NetboxName', ""), re.IGNORECASE)]
+            # filter the onboard GPUs
             server_inventory_gpus = [item for item in pcidevices if re.match("GPU", item.get('NetboxName', ""), re.IGNORECASE) and not re.match("(Embedded|Integrated).*",item['Name'], re.IGNORECASE)]
 
         if server_inventory.get('NetworkAdapters') and not server_inventory_nics:
