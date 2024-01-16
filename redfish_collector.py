@@ -190,6 +190,8 @@ class RedfishIventoryCollector(object):
         for field in fields:
             self._inventory.update({field: server_info.get(field)})
 
+        logging.info(f"  Target {self._target}: Server powerstate: {self._inventory['PowerState']}")
+
         # get the links of the parts for later
         for link in server_info['Links'].keys():
             # some Cisco servers have the links as strings
@@ -403,8 +405,16 @@ class RedfishIventoryCollector(object):
                 processors = self._get_info_from_urls(proc_urls, fields)
                 processors_updated = []
                 for processor in processors:
+
+                    if processor['ProcessorType'] == 'CPU':
+                        processor['NetboxName'] = f"CPU {processor['TotalCores']}C"
+                    elif processor['ProcessorType'] == 'GPU':
+                        # The NVIDIA GPUs might appear as well here as CPUs with ProcessorType == 'CPU'. We need to filter them out to avoid duplicate entries.
+                        continue
+                    else:
+                        logging.warn(f"  Target {self._target}: Unknown Processor Type for {processor['Name']}: {processor['ProcessorType']}.")
+
                     processor['Description'] = processor['Model'] if processor['Model'] else processor['Description']
-                    processor['NetboxName'] = f"CPU {processor['TotalCores']}C"
                     processors_updated.append(processor)
 
                 self._inventory.update({'Processors': processors_updated})
@@ -514,7 +524,7 @@ class RedfishIventoryCollector(object):
                                 else:
                                     port_mac = port_info['Ethernet']['AssociatedMACAddresses']
                             
-                            # Dell R750xd
+                            # Dell R750xd, XE9680
                             else:
                                 port_mac = port_info.get('AssociatedNetworkAddresses')
 
