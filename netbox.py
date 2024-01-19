@@ -75,7 +75,7 @@ class NetboxConnection(object):
         return devices
 
 class NetboxInventoryUpdater(object):
-    def __init__(self, config, device_name, netbox_connection):
+    def __init__(self, device_name, netbox_connection):
 
         self.device_name = device_name
         self.netbox_connection = netbox_connection

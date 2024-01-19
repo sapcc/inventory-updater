@@ -1,18 +1,17 @@
-from redfish_collector import RedfishIventoryCollector, CollectorException
-from netbox import NetboxConnection, NetboxInventoryUpdater
+from handler import welcomePage, InventoryCollector
+from netbox import NetboxConnection
 
 import argparse
 import yaml
 import logging
-import sys
-import socket
 import os
 import warnings
-import json
-import traceback
-import re
 import time
 import gc
+
+from wsgiref.simple_server import make_server, WSGIServer, WSGIRequestHandler
+from socketserver import ThreadingMixIn
+import falcon
 
 def get_args():
     # command line options
@@ -24,85 +23,40 @@ def get_args():
     parser.add_argument(
         "-s", "--servers", help="Use a file with a list of servers instead of pulling it from Netbox.", metavar="FILE", required=False)
     parser.add_argument(
+        "-a", "--api", help="Start in API mode and listen for requests to check the inventory of a server.", action="store_true", required=False)
+    parser.add_argument(
         "-d", "--debug", help="Debugging mode", action="store_true", required=False)
     args = parser.parse_args()
 
     return args
 
-class InventoryCollector(object):
+class _SilentHandler(WSGIRequestHandler):
+    """WSGI handler that does not log requests."""
 
-    def __init__(self, config, target, server):
-        self.config = config
-        self.target = target
-        self.server = server
+    def log_message(self, format, *args):
+        """Log nothing."""
+        pass
 
+
+class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
+    """Thread per request HTTP server."""
+    pass
+
+def falcon_app():
+    port = int(os.getenv("LISTEN_PORT", config.get("listen_port", 9200)))
+    addr = "0.0.0.0"
+    logging.info("Starting Redfish Prometheus Server on Port %s", port)
+
+    api = falcon.API()
+    api.add_route("/inventory", InventoryCollector(config, netbox_connection))
+    api.add_route("/", welcomePage())
+
+    with make_server(addr, port, api, ThreadingWSGIServer, handler_class=_SilentHandler) as httpd:
+        httpd.daemon = True
         try:
-            ip_address = socket.gethostbyname(self.target)
-        except socket.gaierror as err:
-            logging.error(f"  Server {server}: DNS lookup failed for Remote Board {self.target}: {err}")
-            raise ValueError(f"  Server {server}: DNS lookup failed for Remote Board {self.target}: {err}")
-
-        self.ip_address = ip_address
-
-    def redfish(self):
-        inventory = {}
-        logging.info(f"  Target {self.target}: Collecting using RedFish ...")
-
-        usr = os.getenv("REDFISH_USERNAME", self.config['redfish_username'])
-        pwd = os.getenv("REDFISH_PASSWORD", self.config['redfish_password'])
-
-        if not usr:
-            logging.error("No user found in environment and config file!")
-            exit(1)
-
-        if not pwd:
-            logging.error("No password found in environment and config file!")
-            exit(1)
-
-        server_collector = RedfishIventoryCollector(
-            timeout     = int(os.getenv('CONNECTION_TIMEOUT', self.config['connection_timeout'])),
-            target      = self.target,
-            ip_address  = self.ip_address,
-            usr         = usr,
-            pwd         = pwd
-        )
-
-        server_collector.get_session()
-
-        try:
-            inventory = server_collector.collect()
-
-        except CollectorException as err:
-            logging.error(err)
-
-        except Exception as err:
-            logging.exception(traceback.format_exc())
-            exit()
-
-        finally:
-            server_collector.close_session()
-        
-        return inventory
-
-    def cisco(self):
-        inventory = self.redfish()
-        return inventory
-
-    def dell(self):
-        inventory = self.redfish()
-        return inventory
-
-    def hpe(self):
-        inventory = self.redfish()
-        return inventory
-
-    def lenovo(self):
-        inventory = self.redfish()
-        return inventory
-
-    # Defining a function to decide which collection method to call using the manufacturer
-    def collect(self, manufacturer):
-        return getattr(self, manufacturer.lower())()
+            httpd.serve_forever()
+        except (KeyboardInterrupt, SystemExit):
+            logging.info("Stopping Redfish Prometheus Server")
 
 
 def enable_logging(filename, debug):
@@ -171,58 +125,20 @@ def run_inventory_loop(config):
             for server in serverlist:
                 
                 server = server.replace('\r','').replace('\n','')
-                logging.info(f"==> Server {server}")
-
-                matches = re.match(server_pattern, server)
-                if not matches:
-                    logging.error(f"  Server {server}: Not matching the naming convention!")
-                    continue
-
-                node, pod, suffix = matches.groups()
-
-                device_name = node + "-" + pod
-                remote_board = node + "r-" + pod + suffix
-
-                updater = NetboxInventoryUpdater(config, device_name, netbox_connection)
-
-                manufacturer, model = updater.get_device_model()
-                logging.info(f"  Server {server}: Model: {manufacturer} {model}")
-
-                if not manufacturer:
-                    continue
-
-                logging.info(f"==> Server {server}: Collecting inventory")
-                try:
-                    collector = InventoryCollector(config, remote_board, server)
-                # catch DNS errors
-                except ValueError:
-                    continue
-
-                inventory = collector.collect(manufacturer)
-
-                output = json.dumps(inventory, indent=4, sort_keys=True)
-                if args.debug and output and output != "{}":
-                    filename = f"{server}.txt"
-                    logging.info(f"Writing inventory to file {filename}")
-                    output_file = open(filename, 'w')
-                    print(output, file = output_file)
-                    output_file.close()
-                    del output
-
-                if inventory:
-                    logging.info(f"==> Server {server}: Updating Netbox inventory")
-                    result = updater.update_device_inventory(inventory)
-                    del inventory
+                collector= InventoryCollector(config, netbox_connection)
+                collector.check_server_inventory(server)
 
             del serverlist
             del collector
             gc.collect()
+
             logging.info(f"==> Sleeping for {scrape_interval} seconds.")
             time.sleep(scrape_interval)
 
     except KeyboardInterrupt:
         logging.info("Keyboard Interrupt. Stopping Inventory Updater...")
         exit()
+
 
 if __name__ == '__main__':
 
@@ -236,9 +152,10 @@ if __name__ == '__main__':
     if args.servers:
         config['servers'] = args.servers
 
-    server_pattern = re.compile(r"^([a-z]+\d{2,3})-([a-z]{2,3}\d{3})(\..+)$")
-
     netbox_connection = NetboxConnection(config)
 
-    run_inventory_loop(config)
+    if args.api:
+        falcon_app()
+    else:
+        run_inventory_loop(config)
     
