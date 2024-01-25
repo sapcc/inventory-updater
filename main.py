@@ -1,4 +1,4 @@
-from handler import welcomePage, InventoryCollector
+from handler import welcomePage, InventoryCollector, HandlerException
 from netbox import NetboxConnection
 
 import argparse
@@ -118,8 +118,8 @@ def run_inventory_loop(config):
 
     scrape_interval = os.getenv('SCRAPE_INTERVAL', config['scrape_interval'])
 
-    try:
-        while True:
+    while True:
+        try:
             serverlist = get_serverlist(config) # Get the list of servers to check
 
             for server in serverlist:
@@ -135,9 +135,12 @@ def run_inventory_loop(config):
             logging.info(f"==> Sleeping for {scrape_interval} seconds.")
             time.sleep(scrape_interval)
 
-    except KeyboardInterrupt:
-        logging.info("Keyboard Interrupt. Stopping Inventory Updater...")
-        exit()
+        except HandlerException as err:
+            logging.error(err)
+
+        except KeyboardInterrupt:
+            logging.info("Keyboard Interrupt. Stopping Inventory Updater...")
+            exit()
 
 
 if __name__ == '__main__':
