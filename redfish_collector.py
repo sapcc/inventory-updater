@@ -67,6 +67,8 @@ class RedfishIventoryCollector(object):
                 except requests.exceptions.ReadTimeout as err:
                     logging.warning(f"  Target {self._target}: A Read Timeout occured {self.ip_address}: {err}")
 
+                except requests.exceptions.ConnectTimeout as err:
+                    logging.warning(f"  Target {self._target}: A Connection Timeout occured {self.ip_address}: {err}")
 
                 except requests.exceptions.HTTPError as err:
                     logging.warning(f"  Target {self._target}: No session received from server {self.ip_address}: {err}")
