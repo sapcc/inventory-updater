@@ -76,7 +76,6 @@ class InventoryCollector(object):
         try:
             self.ip_address = socket.gethostbyname(self.target)
         except socket.gaierror as err:
-            logging.error(f"  Server {server}: DNS lookup failed for Remote Board {self.target}: {err}")
             raise HandlerException(f"  Server {server}: DNS lookup failed for Remote Board {self.target}: {err}")
 
         updater = NetboxInventoryUpdater(
