@@ -114,7 +114,10 @@ class InventoryCollector(object):
             raise HandlerException(traceback.format_exc())
 
         finally:
-            server_collector.close_session()
+            try:
+                server_collector.close_session()
+            except Exception as err:
+                raise HandlerException(err)
 
         if inventory:
             logging.info(f"==> Server {server}: Updating Netbox inventory")
