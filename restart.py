@@ -16,7 +16,7 @@ def get_args():
     parser.add_argument('-u', "--username", help='username for accessing the remote board', required=True)
     parser.add_argument('-p', "--password", help='password for accessing the remote board', required=True)
     parser.add_argument('-f', "--force", help = "force restart", action='store_true', required=False)
-    parser.add_argument('-to', "--timeout", help = "timeout for redfish request", default=10, required=False)
+    parser.add_argument('-to', "--timeout", help = "timeout for redfish request", default=10, required=False, type=int)
 
     if len(sys.argv)==1:
         parser.print_help()
@@ -132,6 +132,7 @@ if __name__ == '__main__':
     username = args.username
     password = args.password
     force = args.force
+    host = ""
 
     print(f"[INFO] Restarting Remote Board with IP {target}")
 
@@ -150,6 +151,10 @@ if __name__ == '__main__':
             
     elif re.match(node_name_re, target):
         host = target
+    
+    else:
+        print(f"[ERROR] Unknown target format {target}")
+        exit(1)
         
     if host:
         if re.match(node_name_re, host):
