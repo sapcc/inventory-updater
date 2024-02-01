@@ -2,6 +2,7 @@ FROM keppel.eu-de-1.cloud.sap/ccloud-dockerhub-mirror/library/ubuntu:22.04
 
 RUN export DEBIAN_FRONTEND=noninteractive \
     && apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y python3 \
     && apt-get install -y python3-pip
 
@@ -19,3 +20,4 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 COPY *.py /${FOLDERNAME}/
 
 LABEL source_repository="https://github.com/sapcc/inventory-updater"
+LABEL maintainer="Bernd Kuespert <bernd.kuespert@sap.com>"
