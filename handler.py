@@ -48,21 +48,40 @@ class InventoryCollector(object):
             raise falcon.HTTPMissingParam("target")
 
         logging.info(f"Received Target: {self.server}")
+        ip_re = re.compile(r"^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$")
+
+        if ip_re.match(self.server):
+            logging.info(f"Target {self.server}: Target is an IP Address.")
+            try:
+                host = socket.gethostbyaddr(self.server)[0]
+                if host:
+                    server_pattern = re.compile(r"^([a-z]+\d{2,3})r-([a-z]{2,3}\d{3})(\..+)$")
+                    matches = re.match(server_pattern, host)
+                    node, pod, suffix = matches.groups()
+                    self.server = node + "-" + pod + suffix
+                    logging.info(f"Target {self.server}: DNS lookup successful.")
+            except socket.herror as err:
+                msg = f"Target {self.server}: Reverse DNS lookup failed: {err}"
+                logging.error(msg)
+                raise falcon.HTTPInvalidParam(msg, "target")
 
         try:
             result = self.check_server_inventory(self.server)
         except HandlerException:
+            logging.error(traceback.format_exc())
             raise falcon.HTTPBadRequest("Bad Request", traceback.format_exc())
 
-        resp.status = falcon.HTTP_200
-        resp.content_type = 'text/html'
-        resp.body = f"<p>Sucessfully scraped target {self.server}</p>"
+        if result == 0:
+            resp.status = falcon.HTTP_200
+            resp.content_type = 'text/html'
+            resp.body = f"<p>Sucessfully scraped target {self.server}</p>"
 
     def check_server_inventory(self, server):
         
         logging.info(f"==> Server {server}")
 
         server_pattern = re.compile(r"^([a-z]+\d{2,3})-([a-z]{2,3}\d{3})(\..+)$")
+
         matches = re.match(server_pattern, server)
         
         if not matches:
