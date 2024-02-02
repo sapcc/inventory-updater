@@ -24,19 +24,25 @@ class NetboxConnection(object):
 
         req = requests.Request(method=method, url=url, headers=self._headers, params=params, data=data)
         prepped = self._session.prepare_request(req)
+        response = None
 
         try:
             response = self._session.send(prepped, verify=False)
             response.raise_for_status()
         
         except requests.exceptions.HTTPError as err:
-            logging.error(f"  Netbox : {err}: {response.content}")
-            logging.debug(f"    Params: {params}")
-            logging.debug(f"    Data: {data}")
-            logging.debug(f"    Response: {response.content}")
+            logging.error (f"  Netbox Error: {err}")
+            if response:
+                logging.error (f"  Response : {err}: {response.content}")
+
+            logging.debug (f"    Params: {params}")
+            logging.debug (f"    Data: {data}")
+            logging.debug (f"    Response: {response.content}")
 
         except requests.exceptions.ConnectionError as err:
-            logging.error(f"  Netbox : {err}: {response.content}")
+            logging.error (f"  Netbox Error: {err}")
+            if response:
+                logging.error (f"  Response : {err}: {response.content}")
 
         if method == "GET":
             if response.json():
