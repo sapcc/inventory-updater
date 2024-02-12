@@ -1,8 +1,11 @@
-from handler import welcomePage, InventoryCollector, HandlerException
-from netbox import NetboxConnection
+"""
+Inventory Updater is a tool that retrieves the inventory of a server
+using Redfish and updates it in Netbox. The tool can be run in two modes:
+as a daemon that periodically checks the inventory of the servers and updates it in Netbox,
+or as an API that listens for requests to check the inventory of a server.
+"""
 
 import argparse
-import yaml
 import logging
 import os
 import warnings
@@ -11,48 +14,89 @@ import gc
 
 from wsgiref.simple_server import make_server, WSGIServer, WSGIRequestHandler
 from socketserver import ThreadingMixIn
+import yaml
 import falcon
 
-def get_args():
-    # command line options
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "-c", "--config", help="Specify config yaml file", metavar="FILE", required=False, default="config.yaml")
-    parser.add_argument(
-        "-l", "--logging", help="Log all messages to a file", metavar="FILE", required=False, default="./logfile.txt")
-    parser.add_argument(
-        "-s", "--servers", help="Use a file with a list of servers instead of pulling it from Netbox.", metavar="FILE", required=False)
-    parser.add_argument(
-        "-a", "--api", help="Start in API mode and listen for requests to check the inventory of a server.", action="store_true", required=False)
-    parser.add_argument(
-        "-d", "--debug", help="Debugging mode", action="store_true", required=False)
-    args = parser.parse_args()
+from handler import WelcomePage, InventoryCollector, HandlerException
+from netbox import NetboxConnection
 
-    return args
+def get_args():
+    """
+    Get the command line options
+    """
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "-c", "--config",
+        help="Specify config yaml file",
+        metavar="FILE",
+        required=False,
+        default="config.yaml"
+    )
+
+    parser.add_argument(
+        "-l", "--logging",
+        help="Log all messages to a file",
+        metavar="FILE",
+        required=False,
+        default="./logfile.txt"
+    )
+
+    parser.add_argument(
+        "-s",
+        "--servers",
+        help="Use a file with a list of servers instead of pulling it from Netbox.",
+        metavar="FILE",
+        required=False
+    )
+
+    parser.add_argument(
+        "-a",
+        "--api",
+        help="Start in API mode and listen for requests to check the inventory of a server.",
+        action="store_true",
+        required=False
+    )
+
+    parser.add_argument(
+        "-d",
+        "--debug",
+        help="Debugging mode",
+        action="store_true",
+        required=False
+    )
+
+    arguments = parser.parse_args()
+
+    return arguments
 
 class _SilentHandler(WSGIRequestHandler):
     """WSGI handler that does not log requests."""
 
-    def log_message(self, format, *args):
+    def log_message(self, format, *args): # pylint: disable=redefined-builtin
         """Log nothing."""
-        pass
 
 
 class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     """Thread per request HTTP server."""
-    pass
 
-def falcon_app():
+    daemon_threads = True
+
+def falcon_app(config, connection):
+    """
+    Start the Falcon API
+    """
     port = int(os.getenv("LISTEN_PORT", config.get("listen_port", 9200)))
     addr = "0.0.0.0"
     logging.info("Starting Redfish Prometheus Server on Port %s", port)
 
     api = falcon.API()
-    api.add_route("/inventory", InventoryCollector(config, netbox_connection))
-    api.add_route("/", welcomePage())
+    api.add_route("/inventory", InventoryCollector(config, connection))
+    api.add_route("/", WelcomePage())
 
     with make_server(addr, port, api, ThreadingWSGIServer, handler_class=_SilentHandler) as httpd:
-        httpd.daemon = True
+        httpd.daemon = True # pylint: disable=attribute-defined-outside-init
         try:
             httpd.serve_forever()
         except (KeyboardInterrupt, SystemExit):
@@ -60,10 +104,15 @@ def falcon_app():
 
 
 def enable_logging(filename, debug):
-    # enable logging
+    """
+    enable logging
+    """
+
     logger = logging.getLogger()
-    
-    formatter = logging.Formatter('%(asctime)-15s %(process)d %(filename)20s:%(lineno)-3d %(levelname)-7s %(message)s')
+
+    formatter = logging.Formatter(
+        '%(asctime)-15s %(process)d %(filename)20s:%(lineno)-3d %(levelname)-7s %(message)s'
+    )
 
     if debug:
         logger.setLevel(logging.DEBUG)
@@ -77,62 +126,70 @@ def enable_logging(filename, debug):
     if filename:
         try:
             fh = logging.FileHandler(filename, mode='w')
-        except FileNotFoundError as e:
-            logging.error(f"Could not open logfile {filename}: {e}")
+        except FileNotFoundError as err:
+            logging.error("Could not open logfile %s: %s", filename, err)
             exit(1)
 
         fh.setFormatter(formatter)
         logger.addHandler(fh)
 
 def get_config(filename):
-    # get the config
-    try:
-        with open(filename, 'r') as config_file:
-            config =  yaml.load(config_file.read(), Loader=yaml.FullLoader)
-    except FileNotFoundError as e:
-        logging.error(f"Config File not found: {e}")
-        exit(1)
-    return config
+    """
+    Read the config
+    """
 
-def get_serverlist(config):
+    try:
+        with open(filename, 'r', encoding="utf8") as config_file:
+            file_config =  yaml.load(config_file.read(), Loader=yaml.FullLoader)
+    except FileNotFoundError as err:
+        logging.error("Config File not found: %s", err)
+        exit(1)
+    return file_config
+
+def get_serverlist(config, connection):
+    """
+    Get the serverlist from the file or from Netbox
+    """
     serverlist = []
 
     if config.get('servers'):
-        logging.info(f"==> Retrieving server list from file {config['servers']}")
+        logging.info("==> Retrieving server list from file %s", config['servers'])
         try:
-            with open(config['servers'], 'r') as f:
+            with open(config['servers'], 'rt', encoding="utf8") as f:
                 serverlist = f.readlines()
-        except FileNotFoundError as e:
-            logging.error(f"Serverlist File not found: {e}")
+        except FileNotFoundError as err:
+            logging.error("Serverlist File not found: %s", err)
             exit(1)
     else:
-        logging.info(f"==> Retrieving server list from {netbox_connection.netbox_url}")
-        servers = netbox_connection.get_devices()
+        logging.info("==> Retrieving server list from %s", connection.netbox_url)
+        servers = connection.get_devices()
         for server in servers:
             serverlist.append(f"{server['name']}.cc.{server['site']['slug'][:7]}.cloud.sap")
 
-    logging.info(f"  {len(serverlist)} device(s) found.")
+    logging.info("  %s device(s) found.", len(serverlist))
     return serverlist
 
-def run_inventory_loop(config):
-
+def run_inventory_loop(config, connection):
+    """
+    Loop to check the inventory of the servers
+    """
     scrape_interval = os.getenv('SCRAPE_INTERVAL', config['scrape_interval'])
 
     while True:
         try:
-            serverlist = get_serverlist(config) # Get the list of servers to check
+            serverlist = get_serverlist(config, connection)
 
             for server in serverlist:
-                
+
                 server = server.replace('\r','').replace('\n','')
-                collector= InventoryCollector(config, netbox_connection)
+                collector= InventoryCollector(config, connection)
                 collector.check_server_inventory(server)
 
             del serverlist
             del collector
             gc.collect()
 
-            logging.info(f"==> Sleeping for {scrape_interval} seconds.")
+            logging.info("==> Sleeping for %s seconds.", scrape_interval)
             time.sleep(scrape_interval)
 
         except HandlerException as err:
@@ -145,20 +202,20 @@ def run_inventory_loop(config):
 
 if __name__ == '__main__':
 
-    args = get_args()
+    call_args = get_args()
 
     warnings.filterwarnings("ignore")
 
-    enable_logging(args.logging, args.debug)
+    enable_logging(call_args.logging, call_args.debug)
 
-    config = get_config(args.config)
-    if args.servers:
-        config['servers'] = args.servers
+    configuration = get_config(call_args.config)
+    if call_args.servers:
+        configuration['servers'] = call_args.servers
 
-    netbox_connection = NetboxConnection(config)
+    netbox_connection = NetboxConnection(configuration)
 
-    if args.api:
-        falcon_app()
+    if call_args.api:
+        falcon_app(configuration, netbox_connection)
     else:
-        run_inventory_loop(config)
+        run_inventory_loop(configuration, netbox_connection)
     

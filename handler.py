@@ -1,15 +1,27 @@
-from redfish_collector import RedfishIventoryCollector, CollectorException
-from netbox import NetboxInventoryUpdater
-
-import traceback
-import falcon
+"""
+Module for hendling the requests and responses.
+"""
 import logging
 import socket
 import re
 import os
+import traceback
+import falcon
 
-class welcomePage:
-    def on_get(self, req, resp):
+from redfish_collector import RedfishIventoryCollector, CollectorException
+from netbox import NetboxInventoryUpdater
+
+# pylint: disable=no-member
+
+class WelcomePage:
+    """
+    Create the Welcome page for the API.
+    """
+
+    def on_get(self, resp):
+        """
+        Define the GET method for the API.
+        """
         resp.status = falcon.HTTP_200
         resp.content_type = 'text/html'
         resp.body = """
@@ -21,16 +33,24 @@ class welcomePage:
         """
 
 class HandlerException(Exception):
-    pass
+    """
+    Exception class for the handler.
+    """
 
 
 class InventoryCollector(object):
-
+    """
+    Inventory Collector class.
+    """
     def __init__(self, config, netbox_connection):
         self.config = config
         self.netbox_connection = netbox_connection
         self.usr = os.getenv("REDFISH_USERNAME", self.config['redfish_username'])
         self.pwd = os.getenv("REDFISH_PASSWORD", self.config['redfish_password'])
+        self.server = None
+        self.device_name = None
+        self.target = None
+        self.ip_address = None
 
         if not self.usr:
             logging.error("No user found in environment and config file!")
@@ -42,16 +62,22 @@ class InventoryCollector(object):
 
 
     def on_get(self, req, resp):
+        """
+        Define the GET method for the API.
+        """
         self.server = req.get_param("target")
         if not self.server:
             logging.error("No target parameter provided!")
             raise falcon.HTTPMissingParam("target")
 
-        logging.info(f"Received Target: {self.server}")
-        ip_re = re.compile(r"^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$")
+        logging.info("Received Target: %s", self.server)
+        ip_re = re.compile(
+            r"^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}"
+            r"([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$"
+        )
 
         if ip_re.match(self.server):
-            logging.info(f"Target {self.server}: Target is an IP Address.")
+            logging.info("Target %s: Target is an IP Address.", self.server)
             try:
                 host = socket.gethostbyaddr(self.server)[0]
                 if host:
@@ -59,7 +85,7 @@ class InventoryCollector(object):
                     matches = re.match(server_pattern, host)
                     node, pod, suffix = matches.groups()
                     self.server = node + "-" + pod + suffix
-                    logging.info(f"Target {self.server}: DNS lookup successful.")
+                    logging.info("Target %s: DNS lookup successful.", self.server)
             except socket.herror as err:
                 msg = f"Target {self.server}: Reverse DNS lookup failed: {err}"
                 logging.error(msg)
@@ -67,9 +93,9 @@ class InventoryCollector(object):
 
         try:
             result = self.check_server_inventory(self.server)
-        except HandlerException:
+        except HandlerException as exc:
             logging.error(traceback.format_exc())
-            raise falcon.HTTPBadRequest("Bad Request", traceback.format_exc())
+            raise falcon.HTTPBadRequest("Bad Request", traceback.format_exc()) from exc
 
         if result == 0:
             resp.status = falcon.HTTP_200
@@ -77,13 +103,15 @@ class InventoryCollector(object):
             resp.body = f"<p>Sucessfully scraped target {self.server}</p>"
 
     def check_server_inventory(self, server):
-        
-        logging.info(f"==> Server {server}")
+        """
+        Check the inventory of the server.
+        """
+        logging.info("==> Server %s", server)
 
         server_pattern = re.compile(r"^([a-z]+\d{2,3})-([a-z]{2,3}\d{3})(\..+)$")
 
         matches = re.match(server_pattern, server)
-        
+
         if not matches:
             raise HandlerException(f"  Server {server}: Not matching the naming convention!")
 
@@ -95,23 +123,25 @@ class InventoryCollector(object):
         try:
             self.ip_address = socket.gethostbyname(self.target)
         except socket.gaierror as err:
-            raise HandlerException(f"  Server {server}: DNS lookup failed for Remote Board {self.target}: {err}")
+            raise HandlerException(
+                f"  Server {server}: DNS lookup failed for Remote Board {self.target}: {err}"
+            ) from err
 
         updater = NetboxInventoryUpdater(
-            device_name = self.device_name, 
+            device_name = self.device_name,
             netbox_connection = self.netbox_connection
         )
 
         manufacturer, model = updater.get_device_model()
-        logging.info(f"  Server {server}: Model: {manufacturer} {model}")
+        logging.info("  Server %s: Model: %s %s", server, manufacturer, model)
 
         if not manufacturer:
             return 1
 
-        logging.info(f"==> Server {server}: Collecting inventory")
+        logging.info("==> Server %s: Collecting inventory", server)
 
         inventory = {}
-        logging.info(f"  Target {self.target}: Collecting using RedFish ...")
+        logging.info("  Target %s: Collecting using RedFish ...", self.target)
 
         server_collector = RedfishIventoryCollector(
             timeout     = int(os.getenv('CONNECTION_TIMEOUT', self.config['connection_timeout'])),
@@ -127,21 +157,21 @@ class InventoryCollector(object):
             inventory = server_collector.collect()
 
         except CollectorException as err:
-            raise HandlerException(err)
+            raise HandlerException(err) from err
 
         except Exception as err:
-            raise HandlerException(traceback.format_exc())
+            raise HandlerException(traceback.format_exc()) from err
 
         finally:
             try:
                 server_collector.close_session()
             except Exception as err:
-                raise HandlerException(err)
+                raise HandlerException(err) from err
 
         if inventory:
-            logging.info(f"==> Server {server}: Updating Netbox inventory")
+            logging.info("==> Server %s: Updating Netbox inventory", server)
             updater.update_device_inventory(inventory)
-            
+
             del inventory
             del updater
             del server_collector
