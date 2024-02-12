@@ -8,6 +8,11 @@ import json
 import sys
 import requests
 
+class NetboxConnectionException(Exception):
+    """
+    Exception class for the Netbox Connection.
+    """
+
 class NetboxConnection(object):
     """
     Class for Netbox API connection
@@ -56,13 +61,15 @@ class NetboxConnection(object):
             logging.debug ("    Params: %s", params)
             logging.debug ("    Data: %s", data)
             logging.debug ("    Response: %s", response.content)
-            return response
+            raise NetboxConnectionException(
+                f"Netbox HTTP Error: {err}"
+            ) from err
 
         except requests.exceptions.ConnectionError as err:
-            logging.error ("  Netbox Error: %s", err)
+            message = f"Netbox Connection Error: {err}"
             if response:
-                logging.error ("  Response : %s: %s", err, response.content)
-            return response
+                message = f"Netbox Connection Error. Response : {err}: {response.content}"
+            raise NetboxConnectionException(message) from err
 
         if method == "GET":
             if response.json():
@@ -331,20 +338,20 @@ class NetboxInventoryUpdater(object):
             # if no_change:
             if new_netbox_item_json == old_netbox_item_json:
                 logging.info(
-                    "  Netbox %s: No change for {new_netbox_item['name']}",
-                    self.device_name
+                    "  Netbox %s: No change for %s",
+                    self.device_name, new_netbox_item['name']
                 )
             else:
                 if current_netbox_item:
                     logging.info(
-                        "  Netbox %s: Updating item {new_netbox_item['name']}",
-                        self.device_name
+                        "  Netbox %s: Updating item %s",
+                        self.device_name, new_netbox_item['name']
                     )
                     self.update_inventory_item(new_netbox_item_json, current_netbox_item['id'])
                 else:
                     logging.info(
-                        "  Netbox %s: Adding item {new_netbox_item['name']}",
-                        self.device_name
+                        "  Netbox %s: Adding item %s",
+                        self.device_name, new_netbox_item['name']
                     )
                     self.add_inventory_item(new_netbox_item_json)
 

@@ -18,7 +18,7 @@ import yaml
 import falcon
 
 from handler import WelcomePage, InventoryCollector, HandlerException
-from netbox import NetboxConnection
+from netbox import NetboxConnection, NetboxConnectionException
 
 def get_args():
     """
@@ -189,15 +189,16 @@ def run_inventory_loop(config, connection):
             del collector
             gc.collect()
 
-            logging.info("==> Sleeping for %s seconds.", scrape_interval)
-            time.sleep(scrape_interval)
-
-        except HandlerException as err:
+        except (HandlerException, NetboxConnectionException) as err:
             logging.error(err)
 
         except KeyboardInterrupt:
             logging.info("Keyboard Interrupt. Stopping Inventory Updater...")
             exit()
+
+        logging.info("==> Sleeping for %s seconds.", scrape_interval)
+        time.sleep(scrape_interval)
+
 
 
 if __name__ == '__main__':
