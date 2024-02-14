@@ -38,7 +38,7 @@ class HandlerException(Exception):
     """
 
 
-class InventoryCollector(object):
+class InventoryCollector:
     """
     Inventory Collector class.
     """

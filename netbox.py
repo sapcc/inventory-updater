@@ -13,7 +13,7 @@ class NetboxConnectionException(Exception):
     Exception class for the Netbox Connection.
     """
 
-class NetboxConnection(object):
+class NetboxConnection:
     """
     Class for Netbox API connection
     """
@@ -46,6 +46,7 @@ class NetboxConnection(object):
             params=params,
             data=data
         )
+
         prepped = self._session.prepare_request(req)
         response = None
 
@@ -71,9 +72,8 @@ class NetboxConnection(object):
                 message = f"Netbox Connection Error. Response : {err}: {response.content}"
             raise NetboxConnectionException(message) from err
 
-        if method == "GET":
-            if response.json():
-                return response.json()
+        if method == "GET" and response.json():
+            return response.json()
 
     def get_region(self):
         """
@@ -113,7 +113,7 @@ class NetboxConnection(object):
 
         return devices
 
-class NetboxInventoryUpdater(object):
+class NetboxInventoryUpdater:
     """
     Class for Netbox Inventory interaction
     """
@@ -291,11 +291,12 @@ class NetboxInventoryUpdater(object):
         if len(netbox_inventory) > len(server_inventory) and len(netbox_inventory) > 0:
             logging.info(
                 "  Netbox %s: "
-                "Number of Netbox entries for {netbox_inventory[0]['name']} doesn't match:",
-                self.device_name
+                "Number of Netbox entries for %s doesn't match:",
+                self.device_name,
+                netbox_inventory[0]['name']
             )
-            logging.info("  Netbox %s: Netbox: {len(netbox_inventory) }", self.device_name)
-            logging.info("  Netbox %s: Server: {len(server_inventory) }", self.device_name)
+            logging.info("  Netbox %s: Netbox: %s", self.device_name, len(netbox_inventory))
+            logging.info("  Netbox %s: Server: %s", self.device_name, len(server_inventory))
             logging.info("  Netbox %s: Removing entries ...", self.device_name)
             for index in range(len(netbox_inventory) - len(server_inventory)):
                 self.remove_inventory_item(netbox_inventory[index])
