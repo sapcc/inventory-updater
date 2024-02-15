@@ -6,7 +6,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && apt-get install -y python3 \
     && apt-get install -y python3-pip
 
-ARG FOLDERNAME=inventory_updater
+ARG FOLDERNAME=inventory-updater
 
 RUN mkdir /${FOLDERNAME}
 RUN mkdir /${FOLDERNAME}/logs
