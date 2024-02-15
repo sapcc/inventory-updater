@@ -51,8 +51,15 @@ class RedfishIventoryCollector:
         logging.info("  Target %s: Response time: %s seconds.", self._target, self._response_time)
 
         if server_response:
-            logging.debug("  Target %s: data received from server %s.", self._target, self.ip_address)
-            session_service = self.connect_server(server_response['SessionService']['@odata.id'], basic_auth=True)
+            logging.debug(
+                "  Target %s: data received from server %s.",
+                self._target,
+                self.ip_address
+            )
+            session_service = self.connect_server(
+                server_response['SessionService']['@odata.id'],
+                basic_auth=True
+            )
             if self._last_http_code == 200:
                 sessions_url = f"https://{self.ip_address}{session_service['Sessions']['@odata.id']}"
                 session_data = {"UserName": self._username, "Password": self._password}
@@ -61,14 +68,28 @@ class RedfishIventoryCollector:
 
                 # Try to get a session
                 try:
-                    result = self._session.post(sessions_url, json=session_data, verify=False, timeout=self._timeout)
+                    result = self._session.post(
+                        sessions_url,
+                        json=session_data,
+                        verify=False,
+                        timeout=self._timeout
+                    )
                     result.raise_for_status()
 
                 except requests.exceptions.ConnectTimeout as err:
-                    logging.warning("  Target %s: A Connection Timeout occured %s: %s", self._target, self.ip_address, err)
+                    logging.warning(
+                        "  Target %s: A Connection Timeout occured %s: %s",
+                        self._target,
+                        self.ip_address,
+                        err
+                    )
 
                 except requests.exceptions.ConnectionError:
-                    logging.warning("  Target %s: Failed to get an auth token from server %s. Retrying ...", self._target, self.ip_address)
+                    logging.warning(
+                        "  Target %s: Failed to get an auth token from server %s. Retrying ...",
+                        self._target,
+                        self.ip_address
+                    )
                     try:
                         result = self._session.post(
                             sessions_url, json=session_data, verify=False, timeout=self._timeout
@@ -76,14 +97,29 @@ class RedfishIventoryCollector:
                         result.raise_for_status()
 
                     except requests.exceptions.ConnectionError as excptn:
-                        logging.error("  Target %s: Error getting an auth token from server %s: %s", self._target, self.ip_address, excptn)
+                        logging.error(
+                            "  Target %s: Error getting an auth token from server %s: %s",
+                            self._target,
+                            self.ip_address,
+                            excptn
+                        )
                         self._basic_auth = True
 
                 except requests.exceptions.ReadTimeout as err:
-                    logging.warning("  Target %s: A Read Timeout occured %s: %s", self._target, self.ip_address, err)
+                    logging.warning(
+                        "  Target %s: A Read Timeout occured %s: %s",
+                        self._target,
+                        self.ip_address,
+                        err
+                    )
 
                 except requests.exceptions.HTTPError as err:
-                    logging.warning("  Target %s: No session received from server %s: %s", self._target, self.ip_address, err)
+                    logging.warning(
+                        "  Target %s: No session received from server %s: %s",
+                        self._target,
+                        self.ip_address,
+                        err
+                    )
                     logging.warning("  Target %s: Switching to basic authentication.", self._target)
                     self._basic_auth = True
 

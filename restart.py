@@ -217,6 +217,7 @@ if __name__ == '__main__':
         sys.exit(1)
 
     target_manufacturer = get_manufacturer(netbox_device)
+
     restart_remote_board(
         target,
         args.username,
