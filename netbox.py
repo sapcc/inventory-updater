@@ -171,7 +171,10 @@ class NetboxInventoryUpdater:
         """
         Get a device info from Netbox API
         """
+        netbox_device = []
+
         url = self.netbox_connection.netbox_devices_url
+
         params = {
             'name': self.device_name,
             'exclude': 'config_context'
@@ -184,11 +187,11 @@ class NetboxInventoryUpdater:
 
         if len(results) == 0:
             logging.error("  Netbox %s: No such device found!", self.device_name)
-            return
+            return netbox_device
 
         if len(results) > 1:
             logging.error("  Netbox %s: More than one device found!", self.device_name)
-            return
+            return netbox_device
 
         netbox_device = results[0]
 
@@ -247,7 +250,7 @@ class NetboxInventoryUpdater:
         """
 
         url = item['url']
-        logging.info("  Netbox %s: Deleting item {item['name']}", self.device_name)
+        logging.info("  Netbox %s: Deleting item %s", self.device_name, item['name'])
         self.netbox_connection.send_request(url, 'DELETE')
 
     def add_inventory_item(self, item):
@@ -340,23 +343,39 @@ class NetboxInventoryUpdater:
             if new_netbox_item_json == old_netbox_item_json:
                 logging.info(
                     "  Netbox %s: No change for %s",
-                    self.device_name, new_netbox_item['name']
+                    self.device_name,
+                    new_netbox_item['name']
                 )
             else:
                 if current_netbox_item:
                     logging.info(
                         "  Netbox %s: Updating item %s",
-                        self.device_name, new_netbox_item['name']
+                        self.device_name,
+                        new_netbox_item['name']
                     )
                     self.update_inventory_item(new_netbox_item_json, current_netbox_item['id'])
                 else:
                     logging.info(
                         "  Netbox %s: Adding item %s",
-                        self.device_name, new_netbox_item['name']
+                        self.device_name,
+                        new_netbox_item['name']
                     )
                     self.add_inventory_item(new_netbox_item_json)
 
             counter += 1
+
+    def filter_items(self, inventory_items, filter_string):
+        """
+        Filter the Netbox inventory items by name
+        """
+
+        filtered_items = []
+        expression = r'.*(' + filter_string + ').*'
+        for item in inventory_items:
+            if re.match(expression, item['name'], re.IGNORECASE):
+                filtered_items.append(item)
+
+        return filtered_items
 
     def update_device_inventory(self, server_inventory):
         """
@@ -504,7 +523,7 @@ class NetboxInventoryUpdater:
                     server_inventory_nvme.append(item)
 
             if server_inventory_nvme:
-                netbox_inventory_nvme = self.filter_items(netbox_inventory, "NVMe|FLASH")
+                netbox_inventory_nvme = self.filter_items(netbox_inventory, "NVME|FLASH")
                 netbox_inventory_nvme = self._check_item_amount(
                     server_inventory_nvme,
                     netbox_inventory_nvme
@@ -556,15 +575,3 @@ class NetboxInventoryUpdater:
                     server_inventory = server_inventory_controller,
                     netbox_inventory = netbox_inventory_controller
                 )
-
-    def filter_items(self, inventory_items, filter_string):
-        """
-        Filter the Netbox inventory items by name
-        """
-
-        filtered_items = []
-        for item in inventory_items:
-            if re.match(filter_string, item['name'], re.IGNORECASE):
-                filtered_items.append(item)
-
-        return filtered_items

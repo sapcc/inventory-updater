@@ -84,7 +84,7 @@ class RedfishIventoryCollector:
 
                 except requests.exceptions.HTTPError as err:
                     logging.warning("  Target %s: No session received from server %s: %s", self._target, self.ip_address, err)
-                    logging.warning("  Target %s: Switching to basic authentication.")
+                    logging.warning("  Target %s: Switching to basic authentication.", self._target)
                     self._basic_auth = True
 
                 if result:
@@ -142,29 +142,43 @@ class RedfishIventoryCollector:
             req.raise_for_status()
 
         except requests.exceptions.ConnectionError:
-            logging.warning("  Target %s: Connection Error with %s. Retrying ...", self._target, self.ip_address)
+            logging.warning(
+                "  Target %s: Connection Error with %s. Retrying ...",
+                self._target,
+                self.ip_address
+            )
             try:
                 req = self._session.get(url, timeout = self._timeout)
                 req.raise_for_status()
             except requests.exceptions.ConnectionError as e:
-                logging.error("  Target %s: Unable to connect to %s: %s", self._target, self.ip_address, e)
+                logging.error(
+                    "  Target %s: Unable to connect to %s: %s",
+                    self._target,
+                    self.ip_address,
+                    e
+                )
 
         except requests.exceptions.RequestException as err:
             if err.response:
-                logging.error("  Target %s: Unable to connect to {err.response.url}: Status Code {err.response.status_code}")
-                logging.error("  Target %s: {err.response.text}")
+                logging.error(
+                    "  Target %s: Unable to connect to %s: Status Code %s",
+                    self._target,
+                    err.response.url,
+                    err.response.status_code
+                )
+                logging.error("  Target %s: %s", self._target, err.response.text)
             else:
-                logging.error("  Target %s: Unable to connect: %s")
+                logging.error("  Target %s: Unable to connect: %s", self._target, self.ip_address)
 
         if req != "":
             self._last_http_code = req.status_code
-            try: 
+            try:
                 req_text = req.json()
 
             except ValueError:
                 logging.debug("  Target %s: No json data received.", self._target)
 
-            # req will evaluate to True if the status code was between 200 and 400 and False otherwise.
+            # req evaluates to True if the status code was between 200 and 400, False otherwise.
             if req:
                 server_response = req_text
 
@@ -173,13 +187,25 @@ class RedfishIventoryCollector:
                 if req_text:
                     if "error" in req_text and '@Message.ExtendedInfo' in req_text['error']:
 
-                        logging.debug("  Target %s: {req_text['error']['code']}: {req_text['error']['message']}", self._target)
+                        logging.debug(
+                            "  Target %s: %s: %s",
+                            self._target, req_text['error']['code'],
+                            req_text['error']['message']
+                        )
                         if isinstance(req_text['error']['@Message.ExtendedInfo'], list):
                             if 'Message' in req_text['error']['@Message.ExtendedInfo'][0]:
-                                logging.debug("  Target %s: {req_text['error']['@Message.ExtendedInfo'][0]['Message']}")
+                                logging.debug(
+                                    "  Target %s: %s",
+                                    self._target,
+                                    req_text['error']['@Message.ExtendedInfo'][0]['Message']
+                                )
                         elif isinstance(req_text['error']['@Message.ExtendedInfo'], dict):
                             if 'Message' in req_text['error']['@Message.ExtendedInfo']:
-                                logging.debug("  Target %s: {req_text['error']['@Message.ExtendedInfo']['Message']}")
+                                logging.debug(
+                                    "  Target %s: %s",
+                                    self._target,
+                                    req_text['error']['@Message.ExtendedInfo']['Message']
+                                )
                         else:
                             pass
                     # workaround for Cisco UCSC-C480-M5 returning a 503 but still delivering the data
@@ -203,29 +229,46 @@ class RedfishIventoryCollector:
         server_info = self.connect_server(self._urls['Systems'])
 
         if not server_info:
-            logging.warning("  Target %s: No Server Info could be retrieved!")
+            logging.warning("  Target %s: No Server Info could be retrieved!", self._target)
             return
 
-        fields = ('SKU', 'SerialNumber', 'Manufacturer', 'Model', 'PowerState', 'MemorySummary', 'ProcessorSummary')
+        fields = (
+            'SKU',
+            'SerialNumber',
+            'Manufacturer',
+            'Model',
+            'PowerState',
+            'MemorySummary',
+            'ProcessorSummary'
+        )
+
         for field in fields:
             self._inventory.update({field: server_info.get(field)})
 
-        logging.info("  Target %s: Server powerstate: {self._inventory['PowerState']}")
+        logging.info("  Target %s: Server powerstate: %s", self._target, self._inventory['PowerState'])
 
         # get the links of the parts for later
         for link in server_info['Links'].keys():
             # some Cisco servers have the links as strings
-            if type(server_info['Links'][link]) == str:
+            if isinstance(server_info['Links'][link], str):
                 logging.warning("  Target %s: The Link is a string!")
                 self._urls.update({link: server_info['Links'][link][0]})
-            if type(server_info['Links'][link]) == list and server_info['Links'][link] != []:
-                if type(server_info['Links'][link][0]) == str:
+            if isinstance(server_info['Links'][link], list) and server_info['Links'][link] != []:
+                if isinstance(server_info['Links'][link][0], str):
                     url = server_info['Links'][link][0]
                 else:
                     url = server_info['Links'][link][0]['@odata.id']
                 self._urls.update({link: url})
 
-        urls = ('Memory', 'EthernetInterfaces', 'NetworkInterfaces', 'Processors', 'Storage', 'BaseNetworkAdapters')
+        urls = (
+            'Memory',
+            'EthernetInterfaces',
+            'NetworkInterfaces',
+            'Processors',
+            'Storage',
+            'BaseNetworkAdapters'
+        )
+
         for url in urls:
             if url in server_info:
                 self._urls.update({url: server_info[url]['@odata.id']})
@@ -242,7 +285,7 @@ class RedfishIventoryCollector:
                 elif url in chassis_info['Links'] and chassis_info['Links'][url] != []:
                     self._urls.update({url: []})
                     for entry in chassis_info['Links'][url]:
-                        if type(entry) == str:
+                        if isinstance(entry, str):
                             link = entry
                         else:
                             link = entry['@odata.id']
@@ -255,11 +298,11 @@ class RedfishIventoryCollector:
         if collection:
             for member in collection['Members']:
                 urls.append(member['@odata.id'])
-        
-        return urls            
+
+        return urls
 
     def _get_storage_info(self, fields):
-        logging.info("  Target %s: Get the storage data.")
+        logging.info("  Target %s: Get the storage data.", self._target)
         storage_collection = self.connect_server(self._urls['Storage'])
 
         if storage_collection:
@@ -274,7 +317,7 @@ class RedfishIventoryCollector:
                     continue
                 if controller_data.get('StorageControllers'):
                     # Cisco sometimes uses a list instead of a dict
-                    if type(controller_data['StorageControllers']) == list:
+                    if isinstance(controller_data['StorageControllers'], list):
                         controller_details = controller_data['StorageControllers'][0]
                     else:
                         controller_details = controller_data['StorageControllers']
@@ -295,13 +338,13 @@ class RedfishIventoryCollector:
 
                     controller_info['NetboxName'] = "RAID"
                     self._inventory['Controllers'].append(controller_info)
-                
+
                 # Get the drive URLs for later gathering the info
                 for drive in controller_data['Drives']:
                     self._urls['Drives'].append(drive['@odata.id'])
 
     def _get_power_info(self, fields):
-        logging.info("  Target %s: Get the PSU data.")
+        logging.info("  Target %s: Get the PSU data.", self._target)
         power_data = self.connect_server(self._urls['Power'])
         if power_data:
             self._inventory.update({'PSU': []})
@@ -310,7 +353,7 @@ class RedfishIventoryCollector:
                 self._inventory['PSU'].append(psu_info)
 
     def _get_memory_info(self, urls, fields):
-        logging.info("  Target %s: Get the Memory data.")
+        logging.info("  Target %s: Get the Memory data.", self._target)
 
         self._inventory.update({'Memory': []})
         for dimm_url in urls:
@@ -325,9 +368,9 @@ class RedfishIventoryCollector:
                         if 'Hpe' in dimm['Oem']:
                             if dimm['Oem']['Hpe']['DIMMStatus'] != 'NotPresent':
                                 dimm_info.update({'Manufacturer': dimm['Oem']['Hpe'].get('VendorName')})
-                        
+
                     self._inventory['Memory'].append(dimm_info)
-                
+
     def _get_info_from_urls(self, urls, fields=None):
         devices = []
         for url in urls:
@@ -344,21 +387,23 @@ class RedfishIventoryCollector:
         if fields:
             for field in fields:
                 field_value = device_info.get(field)
-                # HPE and Cisco are having some field values filled with unnecessary spaces in the end
-                if type(field_value) == str:
+                # HPE and Cisco: some field values filled with unnecessary spaces in the end
+                if isinstance(field_value, str):
                     field_value = field_value.rstrip()
                 current_device.update({field: field_value})
 
         else:
             current_device = device_info
 
-        has_values = [current_device[k] for k in current_device.keys() if current_device[k] != "" and current_device[k] != None and k != "Name"]
+        has_values = [current_device[k] for k in current_device.keys() if current_device[k] != "" and current_device[k] is not None and k != "Name"]
         if has_values:
             return current_device
 
     def collect(self):
-
-        logging.info("  Target %s: Collecting data ...")
+        """
+        collect the inventory from the server
+        """
+        logging.info("  Target %s: Collecting data ...", self._target)
 
         # Get the Ssystem URLs
         self._get_system_urls()
@@ -367,18 +412,18 @@ class RedfishIventoryCollector:
         if 'Chassis' in self._urls:
             self._get_chassis_urls()
         else:
-            logging.warning("  Target %s: No Chassis URL provided! Cannot get Chassis data!")
+            logging.warning("  Target %s: No Chassis URL provided! Cannot get Chassis data!", self._target)
 
         # Get the storage data
         if 'Storage' in self._urls:
             fields = ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU')
             self._get_storage_info(fields)
         else:
-            logging.warning("  Target %s: No Storage URL provided! Cannot get Storage data!")
+            logging.warning("  Target %s: No Storage URL provided! Cannot get Storage data!", self._target)
 
         # Get the drive data
         if 'Drives' in self._urls:
-            logging.info("  Target %s: Get the drive data.")
+            logging.info("  Target %s: Get the drive data.", self._target)
             fields = ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU', 'MediaType', 'CapacityBytes', 'Protocol')
             drives = self._get_info_from_urls(self._urls['Drives'], fields)
 
@@ -390,7 +435,7 @@ class RedfishIventoryCollector:
                     elif ((drive['Protocol'] == "PCIe" or drive['Protocol'] == "NVMe") and drive['MediaType'] == "SSD") or re.match(r'^.*NVMe.*$', drive['Name']) :
                         drive['NetboxName'] = f"NVMe {round(drive['CapacityBytes']/1024/1024/1024)}GB"
                     else:
-                        logging.warning("  Target %s: Unknown Drive Type! Protocol = {drive['Protocol']}, MediaType = {drive['MediaType']}")
+                        logging.warning("  Target %s: Unknown Drive Type! Protocol = %s, MediaType = %s", self._target, drive['Protocol'], drive['MediaType'])
                     drives_updated.append(drive)
 
             self._inventory.update({'Drives': drives_updated})
@@ -402,7 +447,7 @@ class RedfishIventoryCollector:
             fields = ('Name', 'Manufacturer', 'Model', 'SerialNumber', 'PartNumber', 'SKU')
             self._get_power_info(fields)
         else:
-            logging.warning("  Target %s: No Power URL provided! Cannot get PSU data!")
+            logging.warning("  Target %s: No Power URL provided! Cannot get PSU data!", self._target)
 
         # Get the memory data
         if 'Memory' in self._urls:
@@ -411,14 +456,14 @@ class RedfishIventoryCollector:
                 fields = ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU', 'CapacityMiB', 'OperatingSpeedMhz', 'MemoryDeviceType')
                 self._get_memory_info(urls=dimm_urls, fields=fields)
             else:
-                logging.warning("  Target %s: No DIMM URLs found!")
+                logging.warning("  Target %s: No DIMM URLs found!", self._target)
 
         else:
-            logging.warning("  Target %s: No Memory URL provided! Cannot get memory data!")
+            logging.warning("  Target %s: No Memory URL provided! Cannot get memory data!", self._target)
 
         # Get the processor data
         if 'Processors' in self._urls:
-            logging.info("  Target %s: Get the CPU data.")
+            logging.info("  Target %s: Get the CPU data.", self._target)
             proc_urls = self._get_urls('Processors')
             if proc_urls:
                 fields = ('Name', 'Manufacturer', 'Model', 'SerialNumber', 'PartNumber', 'SKU', 'ProcessorType', 'TotalCores', 'TotalThreads', 'Description')
@@ -432,22 +477,22 @@ class RedfishIventoryCollector:
                         # The NVIDIA GPUs might appear as well here as CPUs with ProcessorType == 'CPU'. We need to filter them out to avoid duplicate entries.
                         continue
                     else:
-                        logging.warning("  Target %s: Unknown Processor Type for {processor['Name']}: {processor['ProcessorType']}.")
+                        logging.warning("  Target %s: Unknown Processor Type for %s: %s.", self._target, processor['Name'], processor['ProcessorType'])
 
                     processor['Description'] = processor['Model'] if processor['Model'] else processor['Description']
                     processors_updated.append(processor)
 
                 self._inventory.update({'Processors': processors_updated})
             else:
-                logging.warning("  Target %s: No Processors found!")
+                logging.warning("  Target %s: No Processors found!", self._target)
 
         else:
             logging.warning("  Target %s: No Processors URL provided! Cannot get Processors data!")
 
         # HPE provides the NIC info in the Chassis/PCIeDevices
         if 'PCIeDevices' in self._urls:
-            logging.info("  Target %s: Get the PCIeDevices data.")
-            if type(self._urls['PCIeDevices']) == list:
+            logging.info("  Target %s: Get the PCIeDevices data.", self._target)
+            if isinstance(self._urls['PCIeDevices'], list):
                 pcie_urls = self._urls['PCIeDevices']
             else:
                 pcie_urls = self._get_urls('PCIeDevices')
@@ -503,14 +548,14 @@ class RedfishIventoryCollector:
 
                 self._inventory.update({'PCIeDevices': pcie_devices_updated})
             else:
-                logging.warning("  Target %s: No PCIe URLs found!")
+                logging.warning("  Target %s: No PCIe URLs found!", self._target)
 
         else:
-            logging.warning("  Target %s: No PCIeDevices URL provided!")
+            logging.warning("  Target %s: No PCIeDevices URL provided!", self._target)
 
         # Dell and HPE Gen11 provide the Nic info in the Chassis/NetworkAdapters
         if 'NetworkAdapters' in self._urls:
-            logging.info("  Target %s: Get the NetworkAdapters data.")
+            logging.info("  Target %s: Get the NetworkAdapters data.", self._target)
             nic_urls = self._get_urls('NetworkAdapters')
             if nic_urls:
                 fields = ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU', 'NetworkPorts', 'Ports')
@@ -536,20 +581,20 @@ class RedfishIventoryCollector:
                                 pass
                             if current_port_speed > port_speed:
                                 port_speed = current_port_speed
-                            
+
                             # HPE Gen11, Lenovo v3
                             if 'Ethernet' in port_info:
                                 if isinstance(port_info['Ethernet']['AssociatedMACAddresses'], list):
                                     port_mac = port_info['Ethernet']['AssociatedMACAddresses'][0]
                                 else:
                                     port_mac = port_info['Ethernet']['AssociatedMACAddresses']
-                            
+
                             # Dell R750xd, XE9680
                             else:
                                 port_mac = port_info.get('AssociatedNetworkAddresses')
 
                             nic['Ports'].append({'PortSpeed': current_port_speed, 'MAC': port_mac})
-                            
+
                     nic['NetboxName'] = f"NIC {port_speed}Gb" if port_speed else "NIC"
                     nic.pop('NetworkPorts')
                     nic_devices_updated.append(nic)
@@ -568,25 +613,45 @@ class RedfishIventoryCollector:
         return self._inventory
 
     def close_session(self):
-
+        """
+        close the session with the server
+        """
         if self._auth_token:
-            logging.debug("  Target %s: Deleting Redfish session with server %s", self._target, self.ip_address)
+            logging.debug(
+                "  Target %s: Deleting Redfish session with server %s",
+                self._target,
+                self.ip_address
+            )
             session_url = f"https://{self.ip_address}{self._session_url}"
             headers = {'x-auth-token': self._auth_token}
 
             logging.debug("  Target %s: Using URL %s", self._target, session_url)
 
             try:
-                response = requests.delete(session_url, verify=False, timeout=self._timeout, headers=headers)
+                response = requests.delete(
+                    session_url,
+                    verify=False,
+                    timeout=self._timeout,
+                    headers=headers
+                )
             except requests.exceptions.ReadTimeout as err:
-                logging.warning("  Target %s: Failed to delete session with server %s: %s", self._target, self.ip_address, err)
+                logging.warning(
+                    "  Target %s: Failed to delete session with server %s: %s",
+                    self._target,
+                    self.ip_address,
+                    err
+                )
             else:
                 response.close()
-                logging.info("  Target %s: Redfish Session deleted successfully.")
+                logging.info("  Target %s: Redfish Session deleted successfully.", self._target)
 
         else:
-            logging.debug("  Target %s: No Redfish session existing with server %s", self._target, self.ip_address)
+            logging.debug(
+                "  Target %s: No Redfish session existing with server %s",
+                self._target,
+                self.ip_address
+            )
 
         if self._session:
-            logging.info("  Target %s: Closing requests session.")
+            logging.info("  Target %s: Closing requests session.", self._target)
             self._session.close()
