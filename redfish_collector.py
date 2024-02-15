@@ -222,7 +222,7 @@ class RedfishIventoryCollector:
         systems = self.connect_server("/redfish/v1/Systems")
 
         if not systems:
-            raise CollectorException("  Target %s: No Systems Info could be retrieved!")
+            raise CollectorException(f"  Target {self._target}: No Systems Info could be retrieved!")
 
         # Get the server info for the labels
         self._urls.update({'Systems': systems['Members'][0]['@odata.id']})
