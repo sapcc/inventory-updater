@@ -180,17 +180,17 @@ def run_inventory_loop(config, connection):
             serverlist = get_serverlist(config, connection)
 
             for server in serverlist:
+                try:
+                    server = server.replace('\r','').replace('\n','')
+                    collector= InventoryCollector(config, connection)
+                    collector.check_server_inventory(server)
 
-                server = server.replace('\r','').replace('\n','')
-                collector= InventoryCollector(config, connection)
-                collector.check_server_inventory(server)
+                except (HandlerException, NetboxConnectionException) as err:
+                    logging.error(err)
 
             del serverlist
             del collector
             gc.collect()
-
-        except (HandlerException, NetboxConnectionException) as err:
-            logging.error(err)
 
         except KeyboardInterrupt:
             logging.info("Keyboard Interrupt. Stopping Inventory Updater...")
