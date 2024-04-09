@@ -177,7 +177,11 @@ def run_inventory_loop(config, connection):
 
     while True:
         try:
-            serverlist = get_serverlist(config, connection)
+
+            try:
+                serverlist = get_serverlist(config, connection)
+            except NetboxConnectionException as err:
+                logging.error(err)
 
             for server in serverlist:
                 try:
@@ -188,7 +192,6 @@ def run_inventory_loop(config, connection):
                 except (HandlerException, NetboxConnectionException) as err:
                     logging.error(err)
 
-            del serverlist
             del collector
             gc.collect()
 
