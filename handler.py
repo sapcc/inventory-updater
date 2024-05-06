@@ -45,8 +45,8 @@ class InventoryCollector:
     def __init__(self, config, netbox_connection):
         self.config = config
         self.netbox_connection = netbox_connection
-        self.usr = os.getenv("REDFISH_USERNAME", self.config['redfish_username'])
-        self.pwd = os.getenv("REDFISH_PASSWORD", self.config['redfish_password'])
+        self.usr = os.getenv("REDFISH_USERNAME", self.config.get('redfish_username'))
+        self.pwd = os.getenv("REDFISH_PASSWORD", self.config.get('redfish_password'))
         self.server = None
         self.device_name = None
         self.target = None
