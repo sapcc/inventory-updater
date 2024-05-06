@@ -608,13 +608,11 @@ class RedfishIventoryCollector:
                         ports_info = self._get_info_from_urls(ports)
                         for port_info in ports_info:
                             current_port_speed = 0
-                            try:
-                                if isinstance(port_info['SupportedLinkCapabilities'], list):
-                                    current_port_speed = round((port_info['SupportedLinkCapabilities'][0]['CapableLinkSpeedMbps'][-1])/1000)
-                                else:
-                                    current_port_speed = round((port_info['SupportedLinkCapabilities']['CapableLinkSpeedMbps'][-1])/1000)
-                            except:
-                                pass
+                            if isinstance(port_info['SupportedLinkCapabilities'], list):
+                                current_port_speed = round((port_info['SupportedLinkCapabilities'][0]['CapableLinkSpeedMbps'][-1])/1000)
+                            else:
+                                current_port_speed = round((port_info['SupportedLinkCapabilities']['CapableLinkSpeedMbps'][-1])/1000)
+
                             if current_port_speed > port_speed:
                                 port_speed = current_port_speed
 
