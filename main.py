@@ -11,6 +11,7 @@ import os
 import warnings
 import time
 import gc
+import sys
 
 from wsgiref.simple_server import make_server, WSGIServer, WSGIRequestHandler
 from socketserver import ThreadingMixIn
@@ -128,7 +129,7 @@ def enable_logging(filename, debug):
             fh = logging.FileHandler(filename, mode='w')
         except FileNotFoundError as err:
             logging.error("Could not open logfile %s: %s", filename, err)
-            exit(1)
+            sys.exit(1)
 
         fh.setFormatter(formatter)
         logger.addHandler(fh)
@@ -143,7 +144,7 @@ def get_config(filename):
             file_config =  yaml.load(config_file.read(), Loader=yaml.FullLoader)
     except FileNotFoundError as err:
         logging.error("Config File not found: %s", err)
-        exit(1)
+        sys.exit(1)
     return file_config
 
 def get_serverlist(config, connection):
@@ -159,7 +160,7 @@ def get_serverlist(config, connection):
                 serverlist = f.readlines()
         except FileNotFoundError as err:
             logging.error("Serverlist File not found: %s", err)
-            exit(1)
+            sys.exit(1)
     else:
         logging.info("==> Retrieving server list from %s", connection.netbox_url)
         servers = connection.get_devices()
@@ -197,7 +198,7 @@ def run_inventory_loop(config, connection):
 
         except KeyboardInterrupt:
             logging.info("Keyboard Interrupt. Stopping Inventory Updater...")
-            exit()
+            sys.exit()
 
         logging.info("==> Sleeping for %s seconds.", scrape_interval)
         time.sleep(scrape_interval)
