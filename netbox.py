@@ -332,7 +332,7 @@ class NetboxInventoryUpdater:
                 'description': description,
                 'name': item.get('NetboxName',""),
                 'device': netbox_device_id,
-                'part_id': item.get('PartNumber', ""),
+                'part_id': item.get('PartNumber', item.get('Model', "")),
                 'serial': item.get('SerialNumber', "")
             }
             old_netbox_item_json = json.dumps(self._convert_netbox_inventory(current_netbox_item))

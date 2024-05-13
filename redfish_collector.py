@@ -244,7 +244,7 @@ class RedfishIventoryCollector:
                                 )
                         else:
                             pass
-                    # workaround for Cisco UCSC-C480-M5 returning a 503 but still delivering the data
+                    # workaround for Cisco UCSC-C480-M5 returning 503 but still delivering the data
                     else:
                         server_response = req_text
 
@@ -281,7 +281,10 @@ class RedfishIventoryCollector:
         for field in fields:
             self._inventory.update({field: server_info.get(field)})
 
-        logging.info("  Target %s: Server powerstate: %s", self._target, self._inventory['PowerState'])
+        logging.info("  Target %s: Server powerstate: %s",
+                        self._target,
+                        self._inventory['PowerState']
+                    )
 
         # get the links of the parts for later
         for link in server_info['Links'].keys():
