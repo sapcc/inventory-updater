@@ -203,7 +203,7 @@ if __name__ == '__main__':
         print(f"[ERROR] Unknown target format {target}")
         sys.exit(1)
 
-    if target_host_name: # pylint: possibly-used-before-assignment
+    if target_host_name: # pylint: disable=used-before-assignment
         if re.match(NODE_NAME_RE, target_host_name):
             matches = re.match(NODE_NAME_RE, target_host_name).groups()
             netbox_device = matches[0] + "-" + matches[1]
