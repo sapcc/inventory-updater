@@ -468,6 +468,8 @@ class RedfishIventoryCollector:
 
             drives_updated = []
             for drive in drives:
+                if not drive['PartNumber']:
+                    drive['PartNumber'] = drive['Model']
                 if drive['CapacityBytes'] > 0:
                     if (drive['Protocol'] == "SATA" or drive['Protocol'] == "SAS") and (drive['MediaType'] == "SSD" or drive['MediaType'] == "HDD"):
                         drive['NetboxName'] = f"{drive['MediaType']} {round(drive['CapacityBytes']/1024/1024/1024)}GB"
