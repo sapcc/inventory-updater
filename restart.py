@@ -179,6 +179,7 @@ if __name__ == '__main__':
 
     # Set the iLO IP address, username and password
     target = args.target
+    target_host_name = None # pylint: disable=invalid-name
 
     print(f"[INFO] Restarting Remote Board with IP {target}")
 
