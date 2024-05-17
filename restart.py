@@ -119,8 +119,9 @@ def restart_remote_board(host, username, password, force, manufacturer, timeout)
         }
 
     expected_status_codes = [200, 202, 204]
+    redfish_url = None
 
-    if manufacturer == "HPE" or manufacturer == "Lenovo":
+    if manufacturer in ("HPE", "Lenovo"):
         # Set the Redfish URL for resetting the iLO
         redfish_url = f"https://{host}/redfish/v1/Managers/1/Actions/Manager.Reset"
 
@@ -202,7 +203,7 @@ if __name__ == '__main__':
         print(f"[ERROR] Unknown target format {target}")
         sys.exit(1)
 
-    if target_host_name:
+    if target_host_name: # pylint: possibly-used-before-assignment
         if re.match(NODE_NAME_RE, target_host_name):
             matches = re.match(NODE_NAME_RE, target_host_name).groups()
             netbox_device = matches[0] + "-" + matches[1]
@@ -216,7 +217,7 @@ if __name__ == '__main__':
         print(f"[ERROR] No valid IP provided: {target}!")
         sys.exit(1)
 
-    target_manufacturer = get_manufacturer(netbox_device)
+    target_manufacturer = get_manufacturer(netbox_device) # pylint: disable=used-before-assignment
 
     restart_remote_board(
         target,
