@@ -122,15 +122,6 @@ class NetboxInventoryUpdater:
         self.device_name = device_name
         self.netbox_connection = netbox_connection
 
-    def _compare_dict(self, dict1, dict2):
-        """
-        compare two dictionaries and return if the same
-        """
-        #changes = [k for k, v in dict1.items() if dict2.get(k) != v ]
-        res = [dict2.get(k) == v for k, v in dict1.items()]
-        same = all(res)
-        return same
-
     def get_manufacturer_id(self, manufacturer):
         """
         Get a manufacturer info from Netbox API
@@ -338,7 +329,6 @@ class NetboxInventoryUpdater:
             old_netbox_item_json = json.dumps(self._convert_netbox_inventory(current_netbox_item))
             new_netbox_item_json = json.dumps(new_netbox_item).replace("null", '""')
 
-            # no_change = self._compare_dict(new_netbox_item, old_netbox_item)
             # if no_change:
             if new_netbox_item_json == old_netbox_item_json:
                 logging.info(
