@@ -94,7 +94,7 @@ class InventoryCollector:
         try:
             result = self.check_server_inventory(self.server)
         except HandlerException as exc:
-            logging.error(traceback.format_exc())
+            logging.error("A Handler Exception occured: %s", traceback.format_exc())
             raise falcon.HTTPBadRequest("Bad Request", traceback.format_exc()) from exc
 
         if result == 0:

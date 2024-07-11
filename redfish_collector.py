@@ -204,7 +204,7 @@ class RedfishIventoryCollector:
                 )
                 logging.error("  Target %s: %s", self._target, err.response.text)
             else:
-                logging.error("  Target %s: Unable to connect: %s", self._target, self.ip_address)
+                logging.error("  Target %s: Unable to connect to URL %s", self._target, url)
 
         if req != "":
             self._last_http_code = req.status_code
@@ -258,7 +258,9 @@ class RedfishIventoryCollector:
         systems = self.connect_server("/redfish/v1/Systems")
 
         if not systems:
-            raise CollectorException(f"  Target {self._target}: No Systems Info could be retrieved!")
+            raise CollectorException(
+                f"  Target {self._target}: No Systems Info could be retrieved!"
+            )
 
         # Get the server info for the labels
         self._urls.update({'Systems': systems['Members'][0]['@odata.id']})
@@ -444,7 +446,7 @@ class RedfishIventoryCollector:
         """
         logging.info("  Target %s: Collecting data ...", self._target)
 
-        # Get the Ssystem URLs
+        # Get the System URLs
         self._get_system_urls()
 
         # Get the chassis URLs
