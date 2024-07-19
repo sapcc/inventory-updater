@@ -1,10 +1,11 @@
 """
-Module for hendling the requests and responses.
+Module for handling the requests and responses.
 """
 import logging
 import socket
 import re
 import os
+import time
 import traceback
 import falcon
 
@@ -91,6 +92,7 @@ class InventoryCollector:
                 logging.error(msg)
                 raise falcon.HTTPInvalidParam(msg, "target")
 
+        start_time = time.time()
         try:
             result = self.check_server_inventory(self.server)
         except HandlerException as exc:
@@ -98,9 +100,10 @@ class InventoryCollector:
             raise falcon.HTTPBadRequest("Bad Request", traceback.format_exc()) from exc
 
         if result == 0:
+            duration = time.time() - start_time
             resp.status = falcon.HTTP_200
             resp.content_type = 'text/html'
-            resp.body = f"<p>Sucessfully scraped target {self.server}</p>"
+            resp.body = f"<p>Sucessfully scraped target {self.server}. Duration: {duration}.</p>"
 
     def check_server_inventory(self, server):
         """
