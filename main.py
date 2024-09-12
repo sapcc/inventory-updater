@@ -175,6 +175,7 @@ def run_inventory_loop(config, connection):
     Loop to check the inventory of the servers
     """
     scrape_interval = os.getenv('SCRAPE_INTERVAL', config['scrape_interval'])
+    serverlist = []
 
     while True:
         try:
