@@ -10,7 +10,7 @@ import logging
 import os
 import warnings
 import time
-import gc
+import gc       # Garbage collection module
 import sys
 
 from wsgiref.simple_server import make_server, WSGIServer, WSGIRequestHandler
@@ -194,8 +194,9 @@ def run_inventory_loop(config, connection):
                 except (HandlerException, NetboxConnectionException) as err:
                     logging.error(err)
 
-            del collector
-            gc.collect()
+                del collector
+
+            gc.collect() # trigger garbage collection
 
         except KeyboardInterrupt:
             logging.info("Keyboard Interrupt. Stopping Inventory Updater...")
