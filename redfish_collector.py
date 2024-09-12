@@ -374,6 +374,7 @@ class RedfishIventoryCollector:
                 for controller in storage_collection['Members']:
                     pass
             # Get the storage details in case the Storage url has no proper infos (Supermicro)
+            # Need to write a function similar to _get_storage_details for this case.
 
     def _get_storage_details(self, storage_collection, fields):
         # From the storage collection we get the URL for every single storage controller
