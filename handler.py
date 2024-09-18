@@ -100,10 +100,10 @@ class InventoryCollector:
             raise falcon.HTTPBadRequest("Bad Request", traceback.format_exc()) from exc
 
         if result == 0:
-            duration = time.time() - start_time
+            duration = round(time.time() - start_time, 2)
             resp.status = falcon.HTTP_200
             resp.content_type = 'text/html'
-            resp.body = f"<p>Sucessfully scraped target {self.server}. Duration: {duration}.</p>"
+            resp.body = f"<p>Sucessfully scraped target {self.server}. Duration: {duration}s.</p>"
 
     def check_server_inventory(self, server):
         """
