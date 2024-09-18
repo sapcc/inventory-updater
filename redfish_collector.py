@@ -164,7 +164,7 @@ class RedfishIventoryCollector:
         self._session.headers.update({'content-type': 'application/json'})
 
         if noauth:
-            logging.debug("  Target %s: Using no auth")
+            logging.debug("  Target %s: Using no auth", self._target)
         elif basic_auth or self._basic_auth:
             self._session.auth = (self._username, self._password)
             logging.debug(
@@ -330,7 +330,7 @@ class RedfishIventoryCollector:
                 self._urls.update({url: server_info[url]['@odata.id']})
 
     def _get_chassis_urls(self):
-        logging.debug("  Target %s: Get the Power URLs.")
+        logging.debug("  Target %s: Get the Power URLs.", self._target)
         chassis_info = self.connect_server(self._urls['Chassis'])
         if chassis_info:
             urls = ('Power', 'PCIeDevices', 'NetworkAdapters')
@@ -526,16 +526,18 @@ class RedfishIventoryCollector:
                 if not drive['PartNumber']:
                     drive['PartNumber'] = drive['Model']
                 if drive['CapacityBytes'] > 0:
-                    if (drive['Protocol'] in ["SATA", "SAS"] and
-                        drive['MediaType'] in ["SSD", "HDD"]):
-                        drive['NetboxName'] = (
-                            f"{drive['MediaType']} {round(drive['CapacityBytes']/1024/1024/1024)}GB"
-                        )
-                    elif (drive['Protocol'] in ["PCIe", "NVMe"] and
+                    if (drive['Protocol'] in ["PCIe", "NVMe"] and
                           drive['MediaType'] == "SSD") or "NVMe" in drive['Name']:
                         drive['NetboxName'] = (
                             f"NVMe {round(drive['CapacityBytes']/1024/1024/1024)}GB"
                         )
+                    elif (drive['Protocol'] in ["SATA", "SAS", None] and
+                        drive['MediaType'] in ["SSD", "HDD"]):
+                        drive['NetboxName'] = (
+                            f"{drive['MediaType']} {round(drive['CapacityBytes']/1024/1024/1024)}GB"
+                        )
+                        # Supermicro is missing the Protocol for SSDs
+                        drive['Protocol'] = getattr(drive, 'Protocol', 'SATA')
                     else:
                         logging.warning(
                             "  Target %s: Unknown Drive Type! Protocol = %s, MediaType = %s",
@@ -781,10 +783,10 @@ class RedfishIventoryCollector:
 
                 self._inventory.update({'NetworkAdapters': nic_devices_updated})
             else:
-                logging.warning("  Target %s: No NIC URLs found!")
+                logging.warning("  Target %s: No NIC URLs found!", self._target)
 
         else:
-            logging.warning("  Target %s: No NetworkAdapters URL provided!")
+            logging.warning("  Target %s: No NetworkAdapters URL provided!", self._target)
 
 
         duration = round(time.time() - self._start_time,2)
@@ -823,7 +825,10 @@ class RedfishIventoryCollector:
                 )
             else:
                 response.close()
-                logging.info("  Target %s: Redfish Session deleted successfully.", self._target)
+                logging.info(
+                    "  Target %s: Redfish Session deleted successfully.",
+                    self._target
+                )
 
         else:
             logging.debug(
