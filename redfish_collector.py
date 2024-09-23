@@ -367,7 +367,7 @@ class RedfishIventoryCollector:
         if storage_collection:
             self._get_storage_details(storage_collection, fields)
 
-        if self._urls['SimpleStorage'] and self._inventory['Controllers'] == []:
+        if self._urls.get('SimpleStorage') and not self._inventory['Controllers']:
             # Some Cisco and SuperMicro servers have the storage info in SimpleStorage
             simple_storage = self.connect_server(self._urls['SimpleStorage'])
             if simple_storage:
