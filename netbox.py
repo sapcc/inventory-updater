@@ -310,7 +310,7 @@ class NetboxInventoryUpdater:
             except IndexError:
                 pass
 
-            # Dell has the real name in the Model, other have it in the Name
+            # Dell has the real name in the Model, others have it in the Name
             description = item.get('Description', None)
             if description is None:
                 if item.get('Name') in ['Network Adapter View','Adapter']:
@@ -425,16 +425,20 @@ class NetboxInventoryUpdater:
 
         server_inventory_nics = []
         server_inventory_gpus = []
+
+        if server_inventory.get('NetworkAdapters'):
+            server_inventory_nics = server_inventory['NetworkAdapters']
+
         pcidevices = server_inventory.get('PCIeDevices', server_inventory.get('PCIDevices'))
         if pcidevices:
-            # filter the NICs
-            server_inventory_nics = []
-            for item in pcidevices:
-                if re.match("NIC.*", item.get('NetboxName', ""), re.IGNORECASE):
-                    server_inventory_nics.append(item)
+
+            if not server_inventory_nics:
+                # filter the NICs
+                for item in pcidevices:
+                    if re.match("NIC.*", item.get('NetboxName', ""), re.IGNORECASE):
+                        server_inventory_nics.append(item)
 
             # filter the onboard GPUs
-            server_inventory_gpus = []
             for item in pcidevices:
                 if re.match(
                     "GPU",
@@ -446,9 +450,6 @@ class NetboxInventoryUpdater:
                     re.IGNORECASE):
 
                     server_inventory_gpus.append(item)
-
-        if server_inventory.get('NetworkAdapters') and not server_inventory_nics:
-            server_inventory_nics = server_inventory['NetworkAdapters']
 
         # NetworkAdapters
         if server_inventory_nics:
