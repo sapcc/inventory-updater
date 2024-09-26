@@ -48,10 +48,6 @@ class InventoryCollector:
         self.netbox_connection = netbox_connection
         self.usr = os.getenv("REDFISH_USERNAME", self.config.get('redfish_username'))
         self.pwd = os.getenv("REDFISH_PASSWORD", self.config.get('redfish_password'))
-        self.server = None
-        self.device_name = None
-        self.target = None
-        self.ip_address = None
 
         if not self.usr:
             logging.error("No user found in environment and config file!")
@@ -66,35 +62,35 @@ class InventoryCollector:
         """
         Define the GET method for the API.
         """
-        self.server = req.get_param("target")
-        if not self.server:
+        target = req.get_param("target")
+        if not target:
             logging.error("No target parameter provided!")
             raise falcon.HTTPMissingParam("target")
 
-        logging.info("Received Target: %s", self.server)
+        logging.info("Received Target: %s", target)
         ip_re = re.compile(
             r"^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}"
             r"([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$"
         )
 
-        if ip_re.match(self.server):
-            logging.info("Target %s: Target is an IP Address.", self.server)
+        if ip_re.match(target):
+            logging.info("Target %s: Target is an IP Address.", target)
             try:
-                host = socket.gethostbyaddr(self.server)[0]
+                host = socket.gethostbyaddr(target)[0]
                 if host:
                     server_pattern = re.compile(r"^([a-z]+\d{2,3})r-([a-z]{2,3}\d{3})(\..+)$")
                     matches = re.match(server_pattern, host)
                     node, pod, suffix = matches.groups()
-                    self.server = node + "-" + pod + suffix
-                    logging.info("Target %s: DNS lookup successful.", self.server)
+                    target = node + "-" + pod + suffix
+                    logging.info("Target %s: DNS lookup successful.", target)
             except socket.herror as err:
-                msg = f"Target {self.server}: Reverse DNS lookup failed: {err}"
+                msg = f"Target {target}: Reverse DNS lookup failed: {err}"
                 logging.error(msg)
                 raise falcon.HTTPInvalidParam(msg, "target")
 
         start_time = time.time()
         try:
-            result = self.check_server_inventory(self.server)
+            result = self.check_server_inventory(target)
         except HandlerException as exc:
             logging.error("A Handler Exception occured: %s", traceback.format_exc())
             raise falcon.HTTPBadRequest("Bad Request", traceback.format_exc()) from exc
@@ -103,7 +99,7 @@ class InventoryCollector:
             duration = round(time.time() - start_time, 2)
             resp.status = falcon.HTTP_200
             resp.content_type = 'text/html'
-            resp.body = f"<p>Sucessfully scraped target {self.server}. Duration: {duration}s.</p>"
+            resp.body = f"<p>Sucessfully scraped target {target}. Duration: {duration}s.</p>"
 
     def check_server_inventory(self, server):
         """
@@ -120,18 +116,18 @@ class InventoryCollector:
 
         node, pod, suffix = matches.groups()
 
-        self.device_name = node + "-" + pod
-        self.target = node + "r-" + pod + suffix
+        device_name = node + "-" + pod
+        target = node + "r-" + pod + suffix
 
         try:
-            self.ip_address = socket.gethostbyname(self.target)
+            ip_address = socket.gethostbyname(target)
         except socket.gaierror as err:
             raise HandlerException(
-                f"  Server {server}: DNS lookup failed for Remote Board {self.target}: {err}"
+                f"  Server {server}: DNS lookup failed for Remote Board {target}: {err}"
             ) from err
 
         updater = NetboxInventoryUpdater(
-            device_name = self.device_name,
+            device_name = device_name,
             netbox_connection = self.netbox_connection
         )
 
@@ -144,12 +140,12 @@ class InventoryCollector:
         logging.info("==> Server %s: Collecting inventory", server)
 
         inventory = {}
-        logging.info("  Target %s: Collecting using RedFish ...", self.target)
+        logging.info("  Target %s: Collecting using RedFish ...", target)
 
         server_collector = RedfishIventoryCollector(
             timeout     = int(os.getenv('CONNECTION_TIMEOUT', self.config['connection_timeout'])),
-            target      = self.target,
-            ip_address  = self.ip_address,
+            target      = target,
+            ip_address  = ip_address,
             usr         = self.usr,
             pwd         = self.pwd
         )
