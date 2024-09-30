@@ -21,13 +21,13 @@ class NetboxConnection:
         self.region = os.getenv("REGION", config['region'])
         self.netbox_query = os.getenv("NETBOX_QUERY", config['netbox']['query'])
 
-        netbox_url = os.getenv("NETBOX_URL", config['netbox']['url'])
-        self.netbox_inventory_items_url = f"{netbox_url}/api/dcim/inventory-items/"
-        self.netbox_devices_url = f"{netbox_url}/api/dcim/devices/"
-        self.netbox_manufacturers_url = f"{netbox_url}/api/dcim/manufacturers/"
-        self.netbox_regions_url = f"{netbox_url}/api/dcim/regions/"
+        self.netbox_url = os.getenv("NETBOX_URL", config['netbox']['url'])
+        self.netbox_inventory_items_url = f"{self.netbox_url}/api/dcim/inventory-items/"
+        self.netbox_devices_url = f"{self.netbox_url}/api/dcim/devices/"
+        self.netbox_manufacturers_url = f"{self.netbox_url}/api/dcim/manufacturers/"
+        self.netbox_regions_url = f"{self.netbox_url}/api/dcim/regions/"
 
-        logging.info("Establishing connection to Netbox %s", netbox_url)
+        logging.info("Establishing connection to Netbox %s", self.netbox_url)
         netbox_token = os.getenv("NETBOX_TOKEN", config['netbox']['token'])
         self._headers = {
             'Content-type': 'application/json',
