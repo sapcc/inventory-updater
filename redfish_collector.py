@@ -549,12 +549,7 @@ class RedfishIventoryCollector:
                     self._target
                 )
 
-        port = (
-            {
-                'PortSpeed': current_port_speed_gbps, 
-                'MAC': port_mac
-            }
-        )
+        port['PortSpeed'] = current_port_speed_gbps
 
         return port
 
