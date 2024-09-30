@@ -356,7 +356,7 @@ class RedfishIventoryCollector:
         urls= []
         logging.debug("  Target %s: Get the %s URLs.", self._target, url)
         collection = self.connect_server(self._urls[url])
-        if collection:
+        if collection and collection.get('Members'):
             for member in collection['Members']:
                 urls.append(member['@odata.id'])
 
@@ -481,6 +481,82 @@ class RedfishIventoryCollector:
             return current_device
 
         return None
+
+    def _get_port_info(self, port_info):
+        '''get the port speed of the NIC'''
+        port = (
+            {
+                'PortSpeed': 0, 
+                'MAC': None
+            }
+        )
+
+        # Get the MAC address
+        # HPE Gen11, Lenovo v3
+        if 'Ethernet' in port_info:
+            macs = port_info['Ethernet']['AssociatedMACAddresses']
+            if isinstance(macs, list):
+                port['MAC'] = macs[0]
+            else:
+                port['MAC'] = macs
+
+        # Dell R750xd, XE9680
+        else:
+            port['MAC'] = port_info.get('AssociatedNetworkAddresses')
+
+        if not 'SupportedLinkCapabilities' in port_info and not 'CurrentSpeedGbps' in port_info:
+            logging.warning(
+                "  Target %s: No CurrentSpeedGbps and SupportedLinkCapabilities found for Port %s!",
+                self._target,
+                port_info['@odata.id']
+            )
+            return port
+
+        current_port_speed_gbps = 0
+        if 'CurrentSpeedGbps' in port_info:
+            current_port_speed_gbps = (
+                port_info.get('CurrentSpeedGbps') or
+                port_info.get('MaxSpeedGbps') or
+                0
+            )
+        else:
+            # Even though the name is CapableLinkSpeedMbps,
+            # the speed is sometimes in bits/second (seen on HPE Gen11)
+            speed = 0
+            capabilities = port_info.get('SupportedLinkCapabilities', [])
+            if isinstance(capabilities, list) and capabilities:
+                speed = (
+                    capabilities[0].get('CapableLinkSpeedMbps') or
+                    capabilities[0].get('LinkSpeedMbps') or
+                    0
+                )
+            elif isinstance(capabilities, dict):
+                speed = (
+                    capabilities.get('CapableLinkSpeedMbps') or
+                    capabilities.get('LinkSpeedMbps') or
+                    0
+                )
+
+            if isinstance(speed, list):
+                speed = speed[-1]
+
+            speed = int(speed)
+            if speed > 1024:
+                current_port_speed_gbps = round(speed / 1024 / 1024 / 1024)
+            else:
+                logging.warning(
+                    "  Target %s: No valid CapableLinkSpeedMbps or LinkSpeedMbps found!",
+                    self._target
+                )
+
+        port = (
+            {
+                'PortSpeed': current_port_speed_gbps, 
+                'MAC': port_mac
+            }
+        )
+
+        return port
 
     def collect(self):
         """
@@ -737,72 +813,14 @@ class RedfishIventoryCollector:
                     # HPE Gen11 Calls it 'Ports'
                     nic_ports_url = nic['NetworkPorts'] if nic['NetworkPorts'] else nic.get('Ports')
                     if nic_ports_url:
-                        nic['Ports'] = []
                         self._urls['NetworkPorts'] = nic_ports_url['@odata.id']
                         ports = self._get_urls('NetworkPorts')
                         ports_info = self._get_info_from_urls(ports)
+                        nic['Ports'] = []
                         for port_info in ports_info:
-                            current_port_speed_gbps = 0
-                            if not 'SupportedLinkCapabilities' in port_info:
-                                logging.warning(
-                                    "  Target %s: No SupportedLinkCapabilities found!",
-                                    self._target
-                                )
-                                continue
+                            nic['Ports'].append(self._get_port_info(port_info))
 
-                            # Even though the name is SupportedLinkCapabilities,
-                            # the speed is in bits/second
-                            if isinstance(port_info['SupportedLinkCapabilities'], list):
-                                speed = port_info['SupportedLinkCapabilities'][0].get(
-                                            'CapableLinkSpeedMbps',
-                                            port_info['SupportedLinkCapabilities'][0].get(
-                                                'LinkSpeedMbps',
-                                                0
-                                            )
-                                        )[-1]
-                                current_port_speed_gbps = round(speed/1024/1024/1024)
-
-                            elif (
-                                'LinkSpeedMbps' in port_info['SupportedLinkCapabilities'] or
-                                'CapableLinkSpeedMbps' in port_info['SupportedLinkCapabilities']
-                            ):
-                                speed = (
-                                            port_info['SupportedLinkCapabilities'].get(
-                                                'CapableLinkSpeedMbps',
-                                                port_info['SupportedLinkCapabilities'].get(
-                                                    'LinkSpeedMbps',
-                                                    0
-                                                )
-                                            )
-                                        )[-1]
-                                current_port_speed_gbps = round(speed/1024/1024/1024)
-
-                            else:
-                                logging.warning(
-                                    "  Target %s: No CapableLinkSpeedMbps or LinkSpeedMbps found!",
-                                    self._target
-                                )
-                            if current_port_speed_gbps > port_speed_gbps:
-                                port_speed_gbps = current_port_speed_gbps
-
-                            # HPE Gen11, Lenovo v3
-                            if 'Ethernet' in port_info:
-                                macs = port_info['Ethernet']['AssociatedMACAddresses']
-                                if isinstance(macs, list):
-                                    port_mac = macs[0]
-                                else:
-                                    port_mac = macs
-
-                            # Dell R750xd, XE9680
-                            else:
-                                port_mac = port_info.get('AssociatedNetworkAddresses')
-
-                            nic['Ports'].append(
-                                {
-                                    'PortSpeed': current_port_speed_gbps, 
-                                    'MAC': port_mac
-                                }
-                            )
+                        port_speed_gbps = max((port.get('PortSpeed') or 0) for port in nic['Ports'])
 
                     nic['NetboxName'] = f"NIC {port_speed_gbps}Gb" if port_speed_gbps else "NIC"
                     nic.pop('NetworkPorts')
