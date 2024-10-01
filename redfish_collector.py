@@ -520,8 +520,6 @@ class RedfishIventoryCollector:
                 0
             )
         else:
-            # Even though the name is CapableLinkSpeedMbps,
-            # the speed is sometimes in bits/second (seen on HPE Gen11)
             speed = 0
             capabilities = port_info.get('SupportedLinkCapabilities', [])
             if isinstance(capabilities, list) and capabilities:
@@ -541,14 +539,12 @@ class RedfishIventoryCollector:
                 speed = speed[-1]
 
             speed = int(speed)
-            if speed > 1024:
+            # Even though the name is CapableLinkSpeedMbps,
+            # the speed is sometimes in bits/second (seen on HPE Gen11)
+            if speed > 1048576:
                 current_port_speed_gbps = round(speed / 1024 / 1024 / 1024)
             else:
-                logging.warning(
-                    "  Target %s: No valid CapableLinkSpeedMbps or LinkSpeedMbps found!",
-                    self._target
-                )
-
+                current_port_speed_gbps = round(speed / 1000)
         port['PortSpeed'] = current_port_speed_gbps
 
         return port
