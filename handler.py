@@ -99,7 +99,7 @@ class InventoryCollector:
             duration = round(time.time() - start_time, 2)
             resp.status = falcon.HTTP_200
             resp.content_type = 'text/html'
-            resp.body = f"<p>Sucessfully scraped target {target}. Duration: {duration}s.</p>"
+            resp.body = f"<p>Successfully pulled the inventory of target {target}. Duration: {duration}s.</p>"
 
     def check_server_inventory(self, server):
         """
