@@ -272,14 +272,18 @@ class RedfishIventoryCollector:
         systems = self.connect_server("/redfish/v1/Systems")
 
         if not systems:
-            raise CollectorException(
-                f"  Target {self._target}: No Systems Info could be retrieved!"
+            logging.error(
+                "  Target %s: No Systems Info could be retrieved!",
+                self._target
             )
+            return
 
         if not systems.get('Members'):
-            raise CollectorException(
-                f"  Target {self._target}: No Systems Members found!"
+            logging.error(
+                "  Target %s: No Systems Members found!",
+                self._target
             )
+            return
 
         # Get the server info for the labels
         self._urls.update({'Systems': systems['Members'][0]['@odata.id']})
@@ -621,7 +625,10 @@ class RedfishIventoryCollector:
 
             self._inventory.update({'Drives': drives_updated})
         else:
-            logging.warning("  Target %s: No Drives URL provided! Cannot get drive data!")
+            logging.warning(
+                "  Target %s: No Drives URL provided! Cannot get drive data!",
+                self._target
+            )
 
         # Get the powersupply data
         if 'Power' in self._urls:
@@ -704,7 +711,10 @@ class RedfishIventoryCollector:
                 logging.warning("  Target %s: No Processors found!", self._target)
 
         else:
-            logging.warning("  Target %s: No Processors URL provided! Cannot get Processors data!")
+            logging.warning(
+                "  Target %s: No Processors URL provided! Cannot get Processors data!",
+                self._target
+            )
 
         # HPE provides the NIC info in the Chassis/PCIeDevices
         if 'PCIeDevices' in self._urls:
