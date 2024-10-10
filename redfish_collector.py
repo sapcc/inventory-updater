@@ -380,8 +380,7 @@ class RedfishIventoryCollector:
             # Some Cisco and SuperMicro servers have the storage info in SimpleStorage
             simple_storage = self.connect_server(self._urls['SimpleStorage'])
             if simple_storage:
-                for controller in storage_collection['Members']:
-                    pass
+                pass
             # Get the storage details in case the Storage url has no proper infos (Supermicro)
             # Need to write a function similar to _get_storage_details for this case.
 

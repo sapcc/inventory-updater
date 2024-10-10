@@ -14,6 +14,16 @@ from netbox import NetboxInventoryUpdater
 
 # pylint: disable=no-member
 
+def get_ip_address(target):
+    """
+    Get the IP address of the target.
+    """
+
+    try:
+        return socket.gethostbyname(target)
+    except socket.gaierror as err:
+        raise HandlerException(f"DNS lookup failed for Remote Board {target}: {err}") from err
+
 class WelcomePage:
     """
     Create the Welcome page for the API.
@@ -103,6 +113,10 @@ class InventoryCollector:
                 f"<p>Successfully pulled the inventory of target {target}."
                 f" Duration: {duration}s.</p>"
             )
+        else:
+            resp.status = falcon.HTTP_500
+            resp.content_type = 'text/html'
+            resp.body = f"<p>Failed to pull the inventory of target {target}.</p>"
 
     def check_server_inventory(self, server):
         """
@@ -119,18 +133,10 @@ class InventoryCollector:
 
         node, pod, suffix = matches.groups()
 
-        device_name = node + "-" + pod
-        target = node + "r-" + pod + suffix
-
-        try:
-            ip_address = socket.gethostbyname(target)
-        except socket.gaierror as err:
-            raise HandlerException(
-                f"  Server {server}: DNS lookup failed for Remote Board {target}: {err}"
-            ) from err
+        bmc = node + "r-" + pod + suffix
 
         updater = NetboxInventoryUpdater(
-            device_name = device_name,
+            device_name = node + "-" + pod,
             netbox_connection = self.netbox_connection
         )
 
@@ -143,12 +149,12 @@ class InventoryCollector:
         logging.info("==> Server %s: Collecting inventory", server)
 
         inventory = {}
-        logging.info("  Target %s: Collecting using RedFish ...", target)
+        logging.info("  Target %s: Collecting using RedFish ...", bmc)
 
         server_collector = RedfishIventoryCollector(
             timeout     = int(os.getenv('CONNECTION_TIMEOUT', self.config['connection_timeout'])),
-            target      = target,
-            ip_address  = ip_address,
+            target      = bmc,
+            ip_address  = get_ip_address(bmc),
             usr         = self.usr,
             pwd         = self.pwd
         )
@@ -179,4 +185,6 @@ class InventoryCollector:
             del server_collector
 
             return 0
+
+        return 1
             
