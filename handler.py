@@ -14,16 +14,6 @@ from netbox import NetboxInventoryUpdater
 
 # pylint: disable=no-member
 
-def get_ip_address(target):
-    """
-    Get the IP address of the target.
-    """
-
-    try:
-        return socket.gethostbyname(target)
-    except socket.gaierror as err:
-        raise HandlerException(f"DNS lookup failed for Remote Board {target}: {err}") from err
-
 class WelcomePage:
     """
     Create the Welcome page for the API.
@@ -154,12 +144,14 @@ class InventoryCollector:
         server_collector = RedfishIventoryCollector(
             timeout     = int(os.getenv('CONNECTION_TIMEOUT', self.config['connection_timeout'])),
             target      = bmc,
-            ip_address  = get_ip_address(bmc),
             usr         = self.usr,
             pwd         = self.pwd
         )
 
         server_collector.get_session()
+
+        if not server_collector.last_http_code:
+            return 1
 
         try:
             inventory = server_collector.collect()
