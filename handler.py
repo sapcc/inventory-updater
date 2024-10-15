@@ -114,6 +114,7 @@ class InventoryCollector:
         """
         logging.info("==> Server %s", server)
 
+        server_collector = None
         server_pattern = re.compile(r"^([a-z]+\d{2,3})-([a-z]{2,3}\d{3})(\..+)$")
 
         matches = re.match(server_pattern, server)
@@ -141,30 +142,31 @@ class InventoryCollector:
         inventory = {}
         logging.info("  Target %s: Collecting using RedFish ...", bmc)
 
-        server_collector = RedfishIventoryCollector(
-            timeout     = int(os.getenv('CONNECTION_TIMEOUT', self.config['connection_timeout'])),
-            target      = bmc,
-            usr         = self.usr,
-            pwd         = self.pwd
-        )
-
-        server_collector.get_session()
-
-        if not server_collector.last_http_code:
-            return 1
-
         try:
+            server_collector = RedfishIventoryCollector(
+                timeout     = int(os.getenv('CONNECTION_TIMEOUT',
+                                            self.config['connection_timeout'])),
+                target      = bmc,
+                usr         = self.usr,
+                pwd         = self.pwd
+            )
+            server_collector.get_session()
+
+            if not server_collector.last_http_code:
+                return 1
+
             inventory = server_collector.collect()
 
         except CollectorException as err:
-            raise HandlerException(err) from err
+            logging.error("  Target %s: Error collecting invnetory: %s", bmc, err)
 
         except Exception as err:
             raise HandlerException(traceback.format_exc()) from err
 
         finally:
             try:
-                server_collector.close_session()
+                if server_collector:
+                    server_collector.close_session()
             except Exception as err:
                 raise HandlerException(err) from err
 
