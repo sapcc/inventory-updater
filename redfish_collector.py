@@ -770,6 +770,23 @@ class RedfishIventoryCollector:
 
         self._inventory.update({'NetworkAdapters': network_cards_updated})
 
+    def _get_tpm_info(self):
+        logging.info("  Target %s: Get the TPM data.", self.target)
+        systeminfo = self.connect_server(self._urls['Systems'])
+        tpm_modules = []
+        if systeminfo and systeminfo.get('TrustedModules'):
+            for tpm in systeminfo['TrustedModules']:
+                module_type = tpm.get('InterfaceType')
+                module_state = tpm.get('Status', {}).get('State', 'Unknown')
+                tpm_info = {
+                    'Description': f'{module_type} - {module_state}',
+                    'Manufacturer': self._inventory['Manufacturer'],
+                    'NetboxName': 'TPM'
+                }
+                tpm_modules.append(tpm_info)
+
+        self._inventory.update({'TrustedModules': tpm_modules})
+
     def _collect_component_data(self, component, method, component_name, fields=None):
         if component in self._urls and self._urls[component]:
             if fields:
@@ -793,9 +810,10 @@ class RedfishIventoryCollector:
         # Get the System URLs
         self._get_system_urls()
         if not self._urls.get('Systems'):
-            return
+            return None
 
         # Collect data for different components
+        self._collect_component_data('Systems', self._get_tpm_info, "TPM")
         self._collect_component_data('Chassis', self._get_chassis_urls, "Chassis")
         self._collect_component_data(
             'Storage', self._get_storage_info, "Storage",

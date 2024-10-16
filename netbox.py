@@ -550,7 +550,7 @@ class NetboxInventoryUpdater:
         # Controllers
         if server_inventory.get('Controllers'):
 
-            # only get controllers that actually have disitems attached
+            # only get controllers that actually have disk drives attached
             server_inventory_controller = []
             for item in server_inventory['Controllers']:
                 if item.get('DrivesAttached'):
@@ -568,3 +568,20 @@ class NetboxInventoryUpdater:
                     server_inventory = server_inventory_controller,
                     netbox_inventory = netbox_inventory_controller
                 )
+
+        # Trusted Platform Modules
+        if server_inventory.get('TrustedModules'):
+
+            server_inventory_tpm = server_inventory['TrustedModules']
+
+            netbox_inventory_tpm = self.filter_items(netbox_inventory, "TPM")
+            netbox_inventory_tpm = self._check_item_amount(
+                server_inventory_tpm,
+                netbox_inventory_tpm
+            )
+
+            self._update_inventory_items(
+                netbox_device_id = netbox_device_id,
+                server_inventory = server_inventory_tpm,
+                netbox_inventory = netbox_inventory_tpm
+            )
