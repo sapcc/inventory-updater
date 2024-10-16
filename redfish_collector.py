@@ -779,7 +779,7 @@ class RedfishIventoryCollector:
                 module_type = tpm.get('InterfaceType')
                 module_state = tpm.get('Status', {}).get('State', 'Unknown')
                 tpm_info = {
-                    'Description': f'{module_type} - {module_state}',
+                    'Description': f'Interface Type: {module_type} - State: {module_state}',
                     'Manufacturer': self._inventory['Manufacturer'],
                     'NetboxName': 'TPM'
                 }
