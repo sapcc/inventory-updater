@@ -153,7 +153,7 @@ class RedfishIventoryCollector:
                 )
 
 
-    def connect_server(self, command, noauth = False, basic_auth = False):
+    def connect_server(self, command, noauth = False, basic_auth = False, fields = None):
         """
         connect to the server and get the data
         """
@@ -164,6 +164,10 @@ class RedfishIventoryCollector:
         server_response = ""
         self.last_http_code = 0
         request_start = time.time()
+
+        if fields:
+            logging.debug("  Target %s: Getting fields %s", self.target, fields)
+            command += "?$select=" + ",".join(fields)
 
         url = f"https://{self.ip_address}{command}"
 
@@ -282,7 +286,7 @@ class RedfishIventoryCollector:
 
     def _get_system_urls(self):
 
-        systems = self.connect_server(self._urls['Systems_Root'])
+        systems = self.connect_server(self._urls['Systems_Root']+'?$expand=*')
 
         if not systems:
             logging.error(
@@ -304,13 +308,10 @@ class RedfishIventoryCollector:
                 self.target
             )
 
-        # Get the server info for the labels
-        self._urls.update({'Systems': systems['Members'][0]['@odata.id']})
-        server_info = self.connect_server(self._urls['Systems'])
+        server_info = systems['Members'][0]
 
-        if not server_info:
-            logging.warning("  Target %s: No Server Info could be retrieved!", self.target)
-            return
+        # Get the server info for the labels
+        self._urls.update({'Systems': server_info['@odata.id']})
 
         fields = (
             'SKU',
@@ -322,6 +323,10 @@ class RedfishIventoryCollector:
             'ProcessorSummary'
         )
 
+        if not server_info:
+            logging.warning("  Target %s: No Server Info could be retrieved!", self.target)
+            return
+
         for field in fields:
             self._inventory.update({field: server_info.get(field)})
 
@@ -331,17 +336,6 @@ class RedfishIventoryCollector:
                     )
 
         # get the links of the parts for later
-        # for link in server_info['Links'].keys():
-        #     # some Cisco servers have the links as strings
-        #     if isinstance(server_info['Links'][link], str):
-        #         logging.warning("  Target %s: The Link is a string!")
-        #         self._urls.update({link: server_info['Links'][link][0]})
-        #     if isinstance(server_info['Links'][link], list) and server_info['Links'][link] != []:
-        #         if isinstance(server_info['Links'][link][0], str):
-        #             url = server_info['Links'][link][0]
-        #         else:
-        #             url = server_info['Links'][link][0]['@odata.id']
-        #         self._urls.update({link: url})
 
         urls = (
             'Memory',
@@ -771,8 +765,10 @@ class RedfishIventoryCollector:
         self._inventory.update({'NetworkAdapters': network_cards_updated})
 
     def _get_tpm_info(self):
+
         logging.info("  Target %s: Get the TPM data.", self.target)
-        systeminfo = self.connect_server(self._urls['Systems'])
+        systeminfo = self.connect_server(self._urls['Systems'], fields=['TrustedModules'])
+
         tpm_modules = []
         if systeminfo and systeminfo.get('TrustedModules'):
             for tpm in systeminfo['TrustedModules']:
