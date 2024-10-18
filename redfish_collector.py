@@ -310,6 +310,10 @@ class RedfishIventoryCollector:
 
         server_info = systems['Members'][0]
 
+        if not server_info:
+            logging.warning("  Target %s: No Server Info could be retrieved!", self.target)
+            return
+
         # Get the server info for the labels
         self._urls.update({'Systems': server_info['@odata.id']})
 
@@ -322,10 +326,6 @@ class RedfishIventoryCollector:
             'MemorySummary',
             'ProcessorSummary'
         )
-
-        if not server_info:
-            logging.warning("  Target %s: No Server Info could be retrieved!", self.target)
-            return
 
         for field in fields:
             self._inventory.update({field: server_info.get(field)})
@@ -385,6 +385,12 @@ class RedfishIventoryCollector:
                         else:
                             link = entry['@odata.id']
                         self._urls[url].append(link)
+                else:
+                    logging.warning(
+                        "  Target %s: No %s URL found in Chassi info!",
+                        self.target,
+                        url
+                    )
 
     def _get_urls(self, url):
         urls= []
@@ -769,8 +775,8 @@ class RedfishIventoryCollector:
         logging.info("  Target %s: Get the TPM data.", self.target)
         systeminfo = self.connect_server(self._urls['Systems'], fields=['TrustedModules'])
 
-        tpm_modules = []
         if systeminfo and systeminfo.get('TrustedModules'):
+            tpm_modules = []
             for tpm in systeminfo['TrustedModules']:
                 module_type = tpm.get('InterfaceType')
                 module_state = tpm.get('Status', {}).get('State', 'Unknown')
@@ -810,7 +816,7 @@ class RedfishIventoryCollector:
 
         # Collect data for different components
         self._collect_component_data('Systems', self._get_tpm_info, "TPM")
-        self._collect_component_data('Chassis', self._get_chassis_urls, "Chassis")
+        self._collect_component_data('Chassis_Root', self._get_chassis_urls, "Chassis")
         self._collect_component_data(
             'Storage', self._get_storage_info, "Storage",
             ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU')
