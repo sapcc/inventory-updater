@@ -158,7 +158,7 @@ class InventoryCollector:
             inventory = server_collector.collect()
 
         except CollectorException as err:
-            logging.error("  Target %s: Error collecting invnetory: %s", bmc, err)
+            logging.error("  Target %s: Error collecting inventory: %s", bmc, err)
 
         except Exception as err:
             raise HandlerException(traceback.format_exc()) from err
