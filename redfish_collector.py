@@ -378,7 +378,11 @@ class RedfishIventoryCollector:
                 if url in chassi_info:
                     self._urls[url].append(chassi_info[url]['@odata.id'])
                 # Dell iDRAC has some of the URLs in the links section, e.g. PCIeDevices
-                elif url in chassi_info['Links'] and chassi_info['Links'][url] != []:
+                elif (
+                    'Links' in chassi_info and 
+                    url in chassi_info['Links'] and
+                    chassi_info['Links'][url] != []
+                ):
                     for entry in chassi_info['Links'][url]:
                         if isinstance(entry, str):
                             link = entry
@@ -387,9 +391,10 @@ class RedfishIventoryCollector:
                         self._urls[url].append(link)
                 else:
                     logging.warning(
-                        "  Target %s: No %s URL found in Chassi info!",
+                        "  Target %s: No %s URL found in Chassi info for Chassis %s!",
                         self.target,
-                        url
+                        url,
+                        chassi_info['Name']
                     )
 
     def _get_urls(self, url):
