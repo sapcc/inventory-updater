@@ -74,8 +74,8 @@ class NetboxConnection:
 
         if method == "GET" and response.json():
             return response.json()
-        else:
-            return response
+
+        return response
 
     def get_region(self):
         """
@@ -194,8 +194,9 @@ class NetboxInventoryUpdater:
         """
         Get a device's model from Netbox API
         """
-        manufacturer = ""
-        model = ""
+        manufacturer = None
+        model = None
+
         netbox_device = self.get_device()
         if netbox_device:
             manufacturer = netbox_device['device_type']['manufacturer']['name']
