@@ -779,9 +779,9 @@ class RedfishIventoryCollector:
 
         logging.info("  Target %s: Get the TPM data.", self.target)
         systeminfo = self.connect_server(self._urls['Systems'], fields=['TrustedModules'])
+        tpm_modules = []
 
         if systeminfo and systeminfo.get('TrustedModules'):
-            tpm_modules = []
             for tpm in systeminfo['TrustedModules']:
                 module_type = tpm.get('InterfaceType')
                 module_state = tpm.get('Status', {}).get('State', 'Unknown')
