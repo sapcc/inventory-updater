@@ -448,10 +448,10 @@ class RedfishIventoryCollector:
                 controller_details = controller_data
 
 
-            controller_info = self._get_device_info(controller_details, fields)
-            # HPE ILO5 is missing the Name in the details of the controllers
-            controller_name = controller_details.get('Name', controller_data.get('Name'))
+            controller_info = self._get_device_info(controller_details, fields, value_check=False)
             if controller_info:
+                # HPE ILO5 is missing the Name in the details of the controllers
+                controller_name = controller_details.get('Name', controller_data.get('Name'))
                 if controller_name:
                     controller_info.update({'Name': controller_name.rstrip()})
 
@@ -520,7 +520,7 @@ class RedfishIventoryCollector:
 
         return devices
 
-    def _get_device_info(self, device_info, fields):
+    def _get_device_info(self, device_info, fields, value_check=True):
         '''extract certain fields from the data'''
         current_device = {}
         if fields:
@@ -534,15 +534,16 @@ class RedfishIventoryCollector:
         else:
             current_device = device_info
 
-        has_values = [
-            v for k, v in current_device.items()
-            if v != "" and v is not None and k != "Name"
-        ]
+        if value_check:
+            has_values = [
+                v for k, v in current_device.items()
+                if v != "" and v is not None and k != "Name"
+            ]
 
-        if has_values:
-            return current_device
+            if not has_values:
+                return None
 
-        return None
+        return current_device
 
     def _get_port_info(self, port_info):
         '''get the port speed of the NIC'''
@@ -566,7 +567,7 @@ class RedfishIventoryCollector:
         else:
             port['MAC'] = port_info.get('AssociatedNetworkAddresses')
 
-        if not 'SupportedLinkCapabilities' in port_info and not 'CurrentSpeedGbps' in port_info:
+        if 'SupportedLinkCapabilities' not in port_info and 'CurrentSpeedGbps' not in port_info:
             logging.warning(
                 "  Target %s: No CurrentSpeedGbps and SupportedLinkCapabilities found for Port %s!",
                 self.target,
