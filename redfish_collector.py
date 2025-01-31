@@ -663,7 +663,7 @@ class RedfishIventoryCollector:
                 processor['NetboxName'] = f"CPU {processor['TotalCores']}C"
             elif processor['ProcessorType'] == 'GPU':
                 # The NVIDIA GPUs might appear as well here as
-                # CPUs with ProcessorType == 'CPU'.
+                # CPUs with ProcessorType == 'GPU'.
                 # We need to filter them out to avoid duplicate entries.
                 continue
             else:
@@ -695,7 +695,18 @@ class RedfishIventoryCollector:
             logging.warning("  Target %s: No PCIe URLs found!", self.target)
             return
 
-        pcie_devices = self._get_info_from_urls(pcie_urls, fields=fields)
+        pcie_device_urls = []
+        for pcie_url in pcie_urls:
+            collection = self.connect_server(pcie_url)
+            if collection and collection.get('Members'):
+                for member in collection['Members']:
+                    pcie_device_urls.append(member['@odata.id'])
+
+        if not pcie_device_urls:
+            logging.warning("  Target %s: No PCIe Device URLs found!", self.target)
+            return
+        
+        pcie_devices = self._get_info_from_urls(pcie_device_urls, fields=fields)
 
         pcie_devices_updated = []
         # Get the DeviceClass
