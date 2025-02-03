@@ -779,7 +779,7 @@ class RedfishIventoryCollector:
                 for port_info in ports_info:
                     nic['Ports'].append(self._get_port_info(port_info))
 
-                port_speed_gbps = max((port.get('PortSpeed') or 0) for port in nic['Ports'])
+                port_speed_gbps = max(((port.get('PortSpeed') or 0) for port in nic['Ports']), default=0)
 
             nic['NetboxName'] = f"NIC {port_speed_gbps}Gb" if port_speed_gbps else "NIC"
             nic.pop('NetworkPorts')
