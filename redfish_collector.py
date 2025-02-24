@@ -666,6 +666,7 @@ class RedfishIventoryCollector:
                 # The NVIDIA GPUs might appear as well here as
                 # CPUs with ProcessorType == 'GPU'.
                 # We need to filter them out to avoid duplicate entries.
+                # They are getting detected as PCI devices as well.
                 continue
             else:
                 logging.warning(
@@ -677,6 +678,8 @@ class RedfishIventoryCollector:
 
             if processor['Model']:
                 processor['Description'] = processor['Model']
+            if processor['MaxSpeedMHz']:
+                processor['Description'] = f"{processor['Description']} @ {processor['MaxSpeedMHz']/1000}GHz"
             processors_updated.append(processor)
 
         self._inventory.update({'Processors': processors_updated})
@@ -860,7 +863,7 @@ class RedfishIventoryCollector:
             'Processors', self._get_processor_info, "Processors",
             (
             'Name', 'Manufacturer', 'Model', 'SerialNumber', 'PartNumber', 'SKU',
-            'ProcessorType', 'TotalCores', 'TotalThreads', 'Description'
+            'ProcessorType', 'TotalCores', 'TotalThreads', 'Description', 'MaxSpeedMHz'
             )
         )
         self._collect_component_data(
