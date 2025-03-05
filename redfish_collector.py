@@ -286,7 +286,7 @@ class RedfishIventoryCollector:
 
     def _get_system_urls(self):
 
-        systems = self.connect_server(self._urls['Systems_Root']+'/1')
+        systems = self.connect_server(self._urls['Systems_Root']+'?$expand=.')
 
         if not systems:
             logging.error(
