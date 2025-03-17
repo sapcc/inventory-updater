@@ -470,12 +470,13 @@ class RedfishIventoryCollector:
 
     def _get_power_info(self, fields):
         logging.info("  Target %s: Get the PSU data.", self.target)
-        power_data = self.connect_server(self._urls['Power'])
-        if power_data:
-            self._inventory.update({'PSU': []})
-            for psu in power_data['PowerSupplies']:
-                psu_info = self._get_device_info(psu, fields)
-                self._inventory['PSU'].append(psu_info)
+        for power_url in self._urls['Power']:
+            power_data = self.connect_server(power_url)
+            if power_data:
+                self._inventory.update({'PSU': []})
+                for psu in power_data['PowerSupplies']:
+                    psu_info = self._get_device_info(psu, fields)
+                    self._inventory['PSU'].append(psu_info)
 
     def _get_memory_info(self, fields):
         logging.info("  Target %s: Get the Memory data.", self.target)
