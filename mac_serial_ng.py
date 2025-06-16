@@ -750,7 +750,7 @@ class InventoryContext:
     #                            print("Mismatch MAC in Netbox. Changing in Netbox {}".format(item))
                         else:
                             pass
-            except Exception as e:
+            except Exception:
                 pass
             self.netbox_nic_interfaces_dict.clear()
         print("Done")

@@ -7,7 +7,8 @@ or as an API that listens for requests to check the inventory of a server.
 
 import argparse
 import logging
-import os, re
+import os
+import re
 import warnings
 import time
 import gc       # Garbage collection module
@@ -20,9 +21,6 @@ import falcon
 
 from handler import WelcomePage, InventoryCollector, HandlerException
 from netbox import NetboxConnection, NetboxConnectionException
-
-api_netbox_key = ""
-
 
 def netbox(instance):
     pattern = r"(global|staging)"
