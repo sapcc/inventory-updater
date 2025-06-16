@@ -7,12 +7,12 @@ or as an API that listens for requests to check the inventory of a server.
 
 import argparse
 import logging
-import os
+import os, re
 import warnings
 import time
 import gc       # Garbage collection module
 import sys
-
+from mac_serial_ng import InventoryContext
 from wsgiref.simple_server import make_server, WSGIServer, WSGIRequestHandler
 from socketserver import ThreadingMixIn
 import yaml
@@ -20,6 +20,15 @@ import falcon
 
 from handler import WelcomePage, InventoryCollector, HandlerException
 from netbox import NetboxConnection, NetboxConnectionException
+
+api_netbox_key = ""
+
+
+def netbox(instance):
+    pattern = r"(global|staging)"
+    if not re.match(pattern, instance):
+        raise argparse.ArgumentTypeError("[ERROR] Wrong Netbox instance!")
+    return instance
 
 def get_args():
     """
@@ -67,6 +76,15 @@ def get_args():
         action="store_true",
         required=False
     )
+
+    parser.add_argument("-q", "--query", type=str, required=True, help="Pod or node name.")
+    parser.add_argument("-u", "--username", type=str, default="support", help="User name.")
+    parser.add_argument("-pass", "--password", type=str, required=True, help="password for user name.")
+    parser.add_argument("-w", "--write", action="store_true", default=False, help="Write infos to Netbox.")
+    parser.add_argument("-m", "--mtu", type=int, default=9000, help="Set MTU Size")
+    parser.add_argument("-f", "--force", action="store_true", default=False, help="Force writing into Netbox. Overwrite-Mode!!!")
+    parser.add_argument("-ip", "--iponly", action="store_true", default=False, help="Use IP instead of DNS/FQDN to access remoteboard")
+    parser.add_argument("-n", "--netbox", type=netbox, default="global", required=False, help="Netbox Instance. Either 'global' or 'staging'.",)
 
     arguments = parser.parse_args()
 
@@ -211,6 +229,25 @@ if __name__ == '__main__':
 
     call_args = get_args()
 
+    NETBOX_ENVIRONMENT = call_args.netbox
+    url_netbox_device_q = f"https://netbox.{NETBOX_ENVIRONMENT}.cloud.sap/api/dcim/devices/?q="
+    url_netbox_ip_device = f"https://netbox.{NETBOX_ENVIRONMENT}.cloud.sap/api/ipam/ip-addresses/?device="
+    url_netbox_device = f"https://netbox.{NETBOX_ENVIRONMENT}.cloud.sap/api/dcim/devices/"
+    url_netbox_device_interface = f"https://netbox.{NETBOX_ENVIRONMENT}.cloud.sap/api/dcim/interfaces/"
+
+    args_user_name = call_args.username
+    args_password = call_args.password
+    args_write_flag = call_args.write
+    args_force_flag = call_args.force
+    args_iponly_flag = call_args.iponly
+    args_mtu = call_args.mtu
+
+    if args_force_flag:
+        args_write_flag = True
+    is_apod = True if "ap" in str.lower(call_args.query) else False
+        
+    inventory_obj = InventoryContext(url_netbox_device_q, url_netbox_ip_device, url_netbox_device, url_netbox_device_interface, args_user_name, args_password, args_write_flag, args_force_flag, args_iponly_flag, args_mtu, is_apod)    
+    
     warnings.filterwarnings("ignore")
 
     enable_logging(call_args.logging, call_args.debug)
@@ -220,7 +257,7 @@ if __name__ == '__main__':
         configuration['servers'] = call_args.servers
 
     netbox_connection = NetboxConnection(configuration)
-
+    inventory_obj.runSerialNumberScript(call_args.query)
     if call_args.api:
         falcon_app(configuration, netbox_connection)
     else:
