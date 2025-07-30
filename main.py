@@ -18,6 +18,7 @@ from wsgiref.simple_server import make_server, WSGIServer, WSGIRequestHandler
 from socketserver import ThreadingMixIn
 import yaml
 import falcon
+from netbox import NetboxInventoryUpdater  
 
 from handler import WelcomePage, InventoryCollector, HandlerException
 from netbox import NetboxConnection, NetboxConnectionException
@@ -76,13 +77,6 @@ def get_args():
     )
 
     parser.add_argument("-q", "--query", type=str, required=True, help="Pod or node name.")
-    parser.add_argument("-u", "--username", type=str, default="support", help="User name.")
-    parser.add_argument("-pass", "--password", type=str, required=True, help="password for user name.")
-    parser.add_argument("-w", "--write", action="store_true", default=False, help="Write infos to Netbox.")
-    parser.add_argument("-m", "--mtu", type=int, default=9000, help="Set MTU Size")
-    parser.add_argument("-f", "--force", action="store_true", default=False, help="Force writing into Netbox. Overwrite-Mode!!!")
-    parser.add_argument("-ip", "--iponly", action="store_true", default=False, help="Use IP instead of DNS/FQDN to access remoteboard")
-    parser.add_argument("-n", "--netbox", type=netbox, default="global", required=False, help="Netbox Instance. Either 'global' or 'staging'.",)
 
     arguments = parser.parse_args()
 
@@ -226,38 +220,37 @@ def run_inventory_loop(config, connection):
 if __name__ == '__main__':
 
     call_args = get_args()
-
-    NETBOX_ENVIRONMENT = call_args.netbox
-    url_netbox_device_q = f"https://netbox.{NETBOX_ENVIRONMENT}.cloud.sap/api/dcim/devices/?q="
-    url_netbox_ip_device = f"https://netbox.{NETBOX_ENVIRONMENT}.cloud.sap/api/ipam/ip-addresses/?device="
-    url_netbox_device = f"https://netbox.{NETBOX_ENVIRONMENT}.cloud.sap/api/dcim/devices/"
-    url_netbox_device_interface = f"https://netbox.{NETBOX_ENVIRONMENT}.cloud.sap/api/dcim/interfaces/"
-
-    args_user_name = call_args.username
-    args_password = call_args.password
-    args_write_flag = call_args.write
-    args_force_flag = call_args.force
-    args_iponly_flag = call_args.iponly
-    args_mtu = call_args.mtu
-
-    if args_force_flag:
-        args_write_flag = True
-    is_apod = True if "ap" in str.lower(call_args.query) else False
-        
-    inventory_obj = InventoryContext(url_netbox_device_q, url_netbox_ip_device, url_netbox_device, url_netbox_device_interface, args_user_name, args_password, args_write_flag, args_force_flag, args_iponly_flag, args_mtu, is_apod)    
-    
+   
     warnings.filterwarnings("ignore")
 
     enable_logging(call_args.logging, call_args.debug)
 
     configuration = get_config(call_args.config)
+    netbox_url = configuration.get("netbox", {}).get("url", "")
+    NETBOX_ENVIRONMENT = "staging" if "staging" in netbox_url else "global"
+
     if call_args.servers:
         configuration['servers'] = call_args.servers
 
     netbox_connection = NetboxConnection(configuration)
-    inventory_obj.runSerialNumberScript(call_args.query)
+
+    #Currently if it is not a pod node, we set special_netbox_case to true
+    special_netbox_case = "ap" in str(call_args.query).lower()
+    if not special_netbox_case:
+        try:
+            device_info = NetboxInventoryUpdater(call_args.query, netbox_connection).get_device()
+            if not device_info:
+                raise NetboxConnectionException(f"Device {call_args.query} not found in Netbox")
+            tags = [tag["name"].lower() for tag in device_info.get("tags", [])]
+            special_netbox_case = any("pod" in tag for tag in tags)
+        except NetboxConnectionException as e:
+            print(f"Warning: Could not determine if device is APOD: {e}")
+
+    inventory_obj = InventoryContext(NETBOX_ENVIRONMENT, configuration, special_netbox_case)
+
     if call_args.api:
         falcon_app(configuration, netbox_connection)
     else:
+        inventory_obj.runSerialNumberScript(call_args.query)
         run_inventory_loop(configuration, netbox_connection)
-    
+

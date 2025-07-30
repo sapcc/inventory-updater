@@ -4,31 +4,35 @@ import os
 import requests
 import urllib3
 from natsort import natsorted
+from typing import Optional, Tuple
 
 urllib3.disable_warnings()
 
 class InventoryContext:
-    def __init__(self, url_netbox_device_q, url_netbox_ip_device, url_netbox_device, url_netbox_device_interface, username, password, write, force, iponly, mtu, is_apod):
+    def __init__(self, NETBOX_ENVIRONMENT, configuration, special_netbox_case):
 
-        self.url_netbox_device_q = url_netbox_device_q
-        self.url_netbox_ip_device = url_netbox_ip_device
-        self.url_netbox_device = url_netbox_device
-        self.url_netbox_device_interface = url_netbox_device_interface
+        self.url_netbox_device_q = f"https://netbox.{NETBOX_ENVIRONMENT}.cloud.sap/api/dcim/devices/?q="
+        self.url_netbox_ip_device = f"https://netbox.{NETBOX_ENVIRONMENT}.cloud.sap/api/ipam/ip-addresses/?device="
+        self.url_netbox_device = f"https://netbox.{NETBOX_ENVIRONMENT}.cloud.sap/api/dcim/devices/"
+        self.url_netbox_device_interface = f"https://netbox.{NETBOX_ENVIRONMENT}.cloud.sap/api/dcim/interfaces/"
 
-        self.args_user_name = username
-        self.args_password = password
-        self.args_write_flag = write
-        self.args_force_flag = force
-        self.args_iponly_flag = iponly
-        self.args_mtu = mtu
-        self.is_apod = is_apod
+        self.args_user_name = os.getenv("REDFISH_USERNAME", configuration.get('redfish_username'))
+        self.args_password = os.getenv("REDFISH_PASSWORD", configuration.get('redfish_password'))
+
+        self.args_write_flag = os.getenv("WRITE", str(configuration.get("write", False))).lower() == "true"
+        self.args_force_flag = os.getenv("FORCE", str(configuration.get("force", False))).lower() == "true"
+        self.args_iponly_flag = os.getenv("IPONLY", str(configuration.get("iponly", False))).lower() == "true"
+        self.args_mtu = int(os.getenv("MTU", configuration.get("mtu", 9000)))
+        self.special_netbox_case = special_netbox_case
+
+        if self.args_force_flag:
+            self.args_write_flag = True
+
         try:
             self.api_netbox_key = os.environ["NETBOX_API_TOKEN"]
         except KeyError:
             print("No NETBOX_API_TOKEN environment variable set, please set one and try again")
             quit(1)
-
-        self.regex_string = r"[0-9]{4,}[a-zA-Z]|[0-9]{4,}"
 
         self.nic_port_mapping_matrix = {
             "Integrated NIC 1 Port 1 Partition 1": "L1",
@@ -219,8 +223,6 @@ class InventoryContext:
         my_response = requests.get(url, auth=(username, password), verify=False)
         data = my_response.json()
         return data["Links"]["Sessions"]["@odata.id"]
-
-    from typing import Optional, Tuple
 
 
     def session_create_x_auth_token(self, server_rib: str, username: str, password: str, session_uri: str) -> Tuple[str, Optional[str]]:
@@ -662,7 +664,6 @@ class InventoryContext:
                         if self.netbox_server_dict[item]["serial"] == "":
                             self.netbox_write_serial_number(device_id, serial_number)
                             print(f"Netbox serial number empty. Writing serial number to Netbox. {item}")
-                            pass
                         if self.args_force_flag:
                             self.netbox_write_serial_number(device_id, serial_number)
                             print(f"Mismatch serial number in Netbox. Changing in Netbox. {item}")
@@ -670,7 +671,6 @@ class InventoryContext:
                         print(device_id, self.netbox_server_dict[item]["serial"], serial_number)
                     mylist = self.netbox_server_dict[item]["nics"]
                     self.netbox_get_interface_mac(self.netbox_server_dict[item]["device_id"])
-                    print(self.netbox_nic_interfaces_dict)
                     for inner_loop in self.netbox_nic_interfaces_dict[item]:
                         if "NIC" in self.netbox_nic_interfaces_dict[item][inner_loop]["name"]:
                             for myitem in mylist:
@@ -719,7 +719,7 @@ class InventoryContext:
                                         self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
                                         print("No MAC-Address in Netbox. Writing MAC to Netbox {}".format(item))
                                     elif payload_data["name"] == "L2":
-                                        if self.is_apod:
+                                        if self.special_netbox_case:
                                             self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
                                             print("No MAC-Address in Netbox. Writing MAC to Netbox {}".format(item))
                                         else:
@@ -734,12 +734,11 @@ class InventoryContext:
                                             print("No 4 Port NIC!!!!")
                                             print("")
                                             isNICNot4Port = False
-                                    pass
                             if self.args_force_flag:
                                 if payload_data["name"] == "L1":
                                     self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
                                 elif payload_data["name"] == "L2":
-                                    if self.is_apod:
+                                    if self.special_netbox_case:
                                         self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
                                     else:
                                         pass
