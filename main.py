@@ -23,11 +23,6 @@ from netbox import NetboxInventoryUpdater
 from handler import WelcomePage, InventoryCollector, HandlerException
 from netbox import NetboxConnection, NetboxConnectionException
 
-def netbox(instance):
-    pattern = r"(global|staging)"
-    if not re.match(pattern, instance):
-        raise argparse.ArgumentTypeError("[ERROR] Wrong Netbox instance!")
-    return instance
 
 def get_args():
     """

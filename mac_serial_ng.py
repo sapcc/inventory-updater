@@ -199,8 +199,9 @@ class InventoryContext:
                                     "HPE": {"uri": "/redfish/v1/Managers/1/EthernetInterfaces/1", "mac_key_name": "MACAddress"},
                                     "Supermicro": {"uri": "/redfish/v1/Managers/1/EthernetInterfaces/1", "mac_key_name": "MACAddress"}
                                     }
-        self.redfish_get_info_mapping = {"Dell": "/redfish/v1/Systems/System.Embedded.1/", "Lenovo": "/redfish/v1/Systems/1/", "HPE": "/redfish/v1/Systems/1/",
-                                    "Supermicro": "/redfish/v1/Systems/1/"}
+
+        self.redfish_get_info_mapping = {"Dell": "System.Embedded.1", "Lenovo": "1", "HPE": "1", "Supermicro": "1"}
+
         self.done_counter = 0
         self.error_counter = 0
         self.result_counter = 0
@@ -217,13 +218,19 @@ class InventoryContext:
         self.hpe_ilo_version_matrix = {"iLO 5": self.hpe_redfish_get_network_interfaces, "iLO 6": self.hpe_redfish_get_network_interfaces_ilo6}
         self.manufacturer_interface = {"Dell": self.dell_redfish_get_network_interfaces, "Lenovo": self.lenovo_redfish_get_network_interfaces, "Supermicro": self.supermicro_redfish_get_network_interfaces}
 
-
-    def session_get_redfish_link(self, server_rib: str, username: str, password: str) -> str:
-        url = f"https://{server_rib}/redfish/v1/"
-        my_response = requests.get(url, auth=(username, password), verify=False)
-        data = my_response.json()
-        return data["Links"]["Sessions"]["@odata.id"]
-
+    def session_get_redfish_link(self, bmc_address: str, username: str, password: str) -> str:
+        """
+        Redfish /v1 path should be accessible without authentication.
+        Return session service link.
+        """
+        url = f"https://{bmc_address}/redfish/v1/"
+        resp = requests.get(url, verify=False)
+        if resp.status_code == 200:
+            return "/redfish/v1/SessionService/Sessions"
+        # fallback with authentication if needed
+        resp = requests.get(url, auth=(username, password), verify=False)
+        resp.raise_for_status()
+        return "/redfish/v1/SessionService/Sessions"
 
     def session_create_x_auth_token(self, server_rib: str, username: str, password: str, session_uri: str) -> Tuple[str, Optional[str]]:
         url = f"https://{server_rib}{session_uri}"
@@ -244,166 +251,138 @@ class InventoryContext:
         requests.delete(url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
 
 
-    def dell_redfish_get_network_interfaces(self, server_name_rib, server_name_short, session_x_auth_token):
+    def dell_redfish_get_network_interfaces(self, bmc_address, server_name_short, session_x_auth_token):
         nic_list = list()
-        url = f"https://{server_name_rib}/redfish/v1/Systems/System.Embedded.1/EthernetInterfaces/"
+        url = f"https://{bmc_address}/redfish/v1/Systems/System.Embedded.1/EthernetInterfaces/"
         myrequest = requests.get(url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
         myjsondata = myrequest.json()
         myjson_members_data = myjsondata["Members"]
         myrequest.close()
-        for item in range(0, len(myjson_members_data)):
-            nic = myjsondata["Members"][item]["@odata.id"]
-            nic_url = f"https://{server_name_rib}{nic}"
+
+        for entry in myjson_members_data:
+            nic = entry["@odata.id"]
+            nic_url = f"https://{bmc_address}{nic}"
             nic_request = requests.get(nic_url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
             nicdata = nic_request.json()
-            if nicdata["MACAddress"] != "":
-                nic_list.append(nicdata["Description"])
-                nic_list.append(self.nic_port_mapping(nicdata["Description"]))
-                if nicdata["MACAddress"] != "":
-                    nic_list.append(nicdata["MACAddress"])
-                
+            if nicdata.get("MACAddress"):
+                nic_list.append(nicdata.get("Description"))
+                nic_list.append(self.nic_port_mapping(nicdata.get("Description")))
+                nic_list.append(nicdata["MACAddress"])
+
             nic_request.close()
         self.netbox_server_dict[server_name_short].update({"nics": nic_list})
 
 
-    def server_redfish_get_system_info(self, server_name_idrac, server_name_short, session_x_auth_token, hw_vendor):
-        url = f"https://{server_name_idrac}{self.redfish_get_info_mapping.get(hw_vendor)}"
+    def server_redfish_get_system_info(self, server_name_bmc, server_name_short, session_x_auth_token, hw_vendor):
+        url = f"https://{server_name_bmc}/redfish/v1/Systems/{self.redfish_get_info_mapping.get(hw_vendor)}"
         myrequest = requests.get(url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
         myjsondata = myrequest.json()
         myrequest.close()
-        # print(f"\tSimple Memory check ...{myjsondata["MemorySummary"]["Status"]["Health"]}")
-        memory = myjsondata["MemorySummary"]["TotalSystemMemoryGiB"]
-        if isinstance(memory, float):
-            memory = round(memory * 1.073741824)
+        memory_gib = myjsondata["MemorySummary"]["TotalSystemMemoryGiB"]   
+        memory_gb = round(memory_gib * 1.073741824)    # 1 GiB = 1.073741824 GB
         vendor = myjsondata["Manufacturer"]
         model = myjsondata["Model"]
         serial = myjsondata["SKU"]
         health = myjsondata["Status"]["Health"]
-        self.netbox_server_dict[server_name_short].update({"manufacturer": vendor, "model": model, "memory": memory, "serial_redfish": serial, "system_health": health})
+        self.netbox_server_dict[server_name_short].update({"manufacturer": vendor, "model": model, "memory_gb": memory_gb, "serial_redfish": serial, "system_health": health})
 
 
-    def lenovo_redfish_get_network_interfaces(self, server_name_rib, server_name_short, session_x_auth_token):
-        nic_list = list()
-        url = f"https://{server_name_rib}/redfish/v1/Chassis/1/NetworkAdapters/"
+    def lenovo_redfish_get_network_interfaces(self, bmc_address, server_name_short, session_x_auth_token):
+        nic_list = []
+        url = f"https://{bmc_address}/redfish/v1/Chassis/1/NetworkAdapters/"
         myrequest = requests.get(url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
-        myjsondata = myrequest.json()
-        myjson_members_data = myjsondata["Members"]
+        myjson_members_data = myrequest.json()["Members"]
         myrequest.close()
-        for item in range(0, len(myjson_members_data)):
-            nic = myjsondata["Members"][item]["@odata.id"]
-            nic_url = f"https://{server_name_rib}{nic}"
+
+        for nic_entry in myjson_members_data:
+            nic_url = f"https://{bmc_address}{nic_entry['@odata.id']}"
             nic_request = requests.get(nic_url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
             nicdata = nic_request.json()
-            if "Mellanox" in nicdata["Manufacturer"]:
-                mydata = nicdata["Controllers"]
-                for item2 in range(0, len(mydata)):
-                    ftdata = mydata[item2]["Links"]["NetworkDeviceFunctions"]
-                    for item3 in range(0, len(ftdata)):
-                        ftdata2 = ftdata[item3]["@odata.id"]
-                        nic2_url = f"https://{server_name_rib}{ftdata2}"
+            nic_request.close()
+
+            manufacturer = nicdata.get("Manufacturer", "")
+            name = nicdata.get("Name", "")
+            
+            if "Mellanox" in manufacturer:
+                prefix = "Mellanox"
+                use_token = True
+            elif "Broadcom" in manufacturer and "RJ45" not in name:
+                prefix = "Broadcom"
+                use_token = False
+            elif "Intel" in manufacturer or "RJ45" in name:
+                prefix = "Intel"
+                use_token = False
+            else:
+                continue  # Skip NICs that don't match these rules
+
+            for controller in nicdata.get("Controllers", []):
+                for func in controller["Links"].get("NetworkDeviceFunctions", []):
+                    nic2_url = f"https://{bmc_address}{func['@odata.id']}"
+                    if use_token:
                         nic2_request = requests.get(nic2_url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
-                        nic2data = nic2_request.json()
-                        custom_field = "Mellanox_" + nicdata["Id"] + "_" + nic2data["Id"]
-                        if nic2data["Ethernet"]["MACAddress"] != "":
-                            nic_list.append(custom_field)
-                            nic_list.append(self.nic_port_mapping(custom_field))
-                            nic_list.append(nic2data["Ethernet"]["MACAddress"])
-                            custom_field = ""
-                        nic2_request.close()
-            if "Broadcom" in nicdata["Manufacturer"] and "RJ45" not in nicdata["Name"]:
-                mydata = nicdata["Controllers"]
-                for item2 in range(0, len(mydata)):
-                    ftdata = mydata[item2]["Links"]["NetworkDeviceFunctions"]
-                    for item3 in range(0, len(ftdata)):
-                        ftdata2 = ftdata[item3]["@odata.id"]
-                        nic2_url = f"https://{server_name_rib}{ftdata2}"
+                    else:
                         nic2_request = requests.get(nic2_url, auth=(self.args_user_name, self.args_password), verify=False)
-                        nic2data = nic2_request.json()
-                        custom_field = "Broadcom_" + nicdata["Id"] + "_" + nic2data["Id"]
-                        if nic2data["Ethernet"]["MACAddress"] != "":
-                            nic_list.append(custom_field)
-                            nic_list.append(self.nic_port_mapping(custom_field))
-                            nic_list.append(nic2data["Ethernet"]["MACAddress"])
-                            custom_field = ""
-                        nic2_request.close()
-            if "Intel" in nicdata["Manufacturer"] or "RJ45" in nicdata["Name"]:
-                mydata = nicdata["Controllers"]
-                for item2 in range(0, len(mydata)):
-                    ftdata = mydata[item2]["Links"]["NetworkDeviceFunctions"]
-                    for item3 in range(0, len(ftdata)):
-                        ftdata2 = ftdata[item3]["@odata.id"]
-                        nic2_url = f"https://{server_name_rib}{ftdata2}"
-                        nic2_request = requests.get(nic2_url, auth=(self.args_user_name, self.args_password), verify=False)
-                        nic2data = nic2_request.json()
-                        custom_field = "Intel_" + nicdata["Id"] + "_" + nic2data["Id"]
-                        if nic2data["Ethernet"]["MACAddress"] != "":
-                            nic_list.append(custom_field)
-                            nic_list.append(self.nic_port_mapping(custom_field))
-                            nic_list.append(nic2data["Ethernet"]["MACAddress"])
-                            custom_field = ""
-                        nic2_request.close()
-            nic_request.close()
+                    
+                    nic2data = nic2_request.json()
+                    nic2_request.close()
+
+                    custom_field = f"{prefix}_{nicdata['Id']}_{nic2data['Id']}"
+                    mac = nic2data.get("Ethernet", {}).get("MACAddress")
+                    if mac:
+                        nic_list.append(custom_field)
+                        nic_list.append(self.nic_port_mapping(custom_field))
+                        nic_list.append(mac)
+
         self.netbox_server_dict[server_name_short].update({"nics": nic_list})
 
 
-    def hpe_redfish_get_network_interfaces(self,server_name_rib, server_name_short, session_x_auth_token):
+    def hpe_redfish_get_network_interfaces(self,bmc_address, server_name_short, session_x_auth_token):
         nic_list = list()
-        url = f"https://{server_name_rib}/redfish/v1/Systems/1/BaseNetworkAdapters/"
+        url = f"https://{bmc_address}/redfish/v1/Systems/1/BaseNetworkAdapters/"
+        myrequest = requests.get(url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
+        myjsondata = myrequest.json()
+        adapters_data = myjsondata["Members"]
+        myrequest.close()
+        for adapter_entry in adapters_data:
+            adapter_url = f"https://{bmc_address}{adapter_entry['@odata.id']}"
+            adapter_response = requests.get(adapter_url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
+            adapter_data = adapter_response.json()
+            adapter_response.close()
+
+            adapter_name = adapter_data.get("Name", "")
+            structured_name = adapter_data.get("StructuredName", "")
+            physical_ports = adapter_data.get("PhysicalPorts", [])
+
+            if ("Connect" in adapter_name or "Eth 100G" in adapter_name or "FlexLOM" in structured_name):
+                custom_field = structured_name + "_"
+                for port in physical_ports:
+                    mac = port.get("MacAddress")
+                    if mac:
+                        self.mac_list.append(mac)
+
+                self.mac_list.sort()
+
+                for mac_item in self.mac_list:
+                    suffix = str(self.mac_list.index(mac_item) + 1)
+                    nic_list.append(custom_field + suffix)
+                    nic_list.append(self.nic_port_mapping(custom_field + suffix))
+                    nic_list.append(mac_item)
+
+                self.mac_list.clear()
+
+        self.netbox_server_dict[server_name_short].update({"nics": nic_list})
+
+
+    def hpe_redfish_get_network_interfaces_ilo6(self, bmc_address, server_name_short, session_x_auth_token):
+        nic_list = list()
+        url = f"https://{bmc_address}/redfish/v1/Systems/1/PCIDevices/"
         myrequest = requests.get(url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
         myjsondata = myrequest.json()
         myjson_members_data = myjsondata["Members"]
         myrequest.close()
         for item in range(0, len(myjson_members_data)):
             nic = myjsondata["Members"][item]["@odata.id"]
-            nic_url = f"https://{server_name_rib}{nic}"
-            nic_request = requests.get(nic_url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
-            nicdata = nic_request.json()
-            nic_request.close()
-            if "Connect" in nicdata["Name"] or "Eth 100G" in nicdata["Name"]:
-                mydata = nicdata["PhysicalPorts"]
-                for item2 in range(0, len(mydata)):
-                    custom_field = nicdata["StructuredName"] + "_"
-                    self.mac_list.append(mydata[item2]["MacAddress"])
-
-                self.mac_list.sort()
-                for mac_item in self.mac_list:
-                    suffix = str((self.mac_list.index(mac_item) + 1))
-                    nic_list.append(custom_field + suffix)
-                    nic_list.append(self.nic_port_mapping(custom_field + suffix))
-                    nic_list.append(mac_item)
-
-                custom_field = ""
-                self.mac_list.clear()
-
-            if "FlexLOM" in nicdata["StructuredName"]:
-                mydata = nicdata["PhysicalPorts"]
-                for item2 in range(0, len(mydata)):
-                    custom_field = nicdata["StructuredName"] + "_"
-                    self.mac_list.append(mydata[item2]["MacAddress"])
-
-                self.mac_list.sort()
-                for mac_item in self.mac_list:
-                    suffix = str((self.mac_list.index(mac_item) + 1))
-                    nic_list.append(custom_field + suffix)
-                    nic_list.append(self.nic_port_mapping(custom_field + suffix))
-                    nic_list.append(mac_item)
-
-                custom_field = ""
-                self.mac_list.clear()
-
-        self.netbox_server_dict[server_name_short].update({"nics": nic_list})
-
-
-    def hpe_redfish_get_network_interfaces_ilo6(self, server_name_rib, server_name_short, session_x_auth_token):
-        nic_list = list()
-        url = f"https://{server_name_rib}/redfish/v1/Systems/1/PCIDevices/"
-        myrequest = requests.get(url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
-        myjsondata = myrequest.json()
-        myjson_members_data = myjsondata["Members"]
-        myrequest.close()
-        for item in range(0, len(myjson_members_data)):
-            nic = myjsondata["Members"][item]["@odata.id"]
-            nic_url = f"https://{server_name_rib}{nic}"
+            nic_url = f"https://{bmc_address}{nic}"
             nic_request = requests.get(nic_url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
             nicdata = nic_request.json()
             nic_request.close()
@@ -420,14 +399,14 @@ class InventoryContext:
                     nic_device_endpoint_url = "/Ports/"
                     custom_field = "NIC.FlexLOM.1.1" + "_"
 
-                url2 = f"https://{server_name_rib}/redfish/v1/Chassis/1/NetworkAdapters/{nic_device_resource_id}{nic_device_endpoint_url}"
+                url2 = f"https://{bmc_address}/redfish/v1/Chassis/1/NetworkAdapters/{nic_device_resource_id}{nic_device_endpoint_url}"
                 myrequest2 = requests.get(url2, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
                 myjsondata2 = myrequest2.json()
                 myjson_members_data2 = myjsondata2["Members"]
                 myrequest2.close()
-                for item2 in range(0, len(myjson_members_data2)):
-                    nic2 = myjsondata2["Members"][item2]["@odata.id"]
-                    nic2_url = f"https://{server_name_rib}{nic2}"
+                for nic_entry in myjson_members_data2:
+                    nic2 = nic_entry["@odata.id"]
+                    nic2_url = f"https://{bmc_address}{nic2}"
                     nic2_request = requests.get(nic2_url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
                     nic2data = nic2_request.json()
                     nic2_request.close()
@@ -451,36 +430,34 @@ class InventoryContext:
         self.netbox_server_dict[server_name_short].update({"nics": nic_list})
 
 
-    def hpe_get_ilo_version(self, server_name_rib, session_x_auth_token):
-        url = f"https://{server_name_rib}/redfish/v1/Managers/1/"
+    def hpe_get_ilo_version(self, bmc_address, session_x_auth_token):
+        url = f"https://{bmc_address}/redfish/v1/Managers/1/"
         myrequest = requests.get(url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
         myjsondata = myrequest.json()
         myrequest.close()
         return myjsondata["Model"]
 
 
-    def supermicro_redfish_get_network_interfaces(self, server_name_rib, server_name_short, session_x_auth_token):
+    def supermicro_redfish_get_network_interfaces(self, bmc_address, server_name_short, session_x_auth_token):
         nic_list = list()
-        url = f"https://{server_name_rib}/redfish/v1/Chassis/1/NetworkAdapters/"
+        url = f"https://{bmc_address}/redfish/v1/Chassis/1/NetworkAdapters/"
         myrequest = requests.get(url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
         myjsondata = myrequest.json()
         myjson_members_data = myjsondata["Members"]
         myrequest.close()
-        for item in range(0, len(myjson_members_data)):
-            nic = myjsondata["Members"][item]["@odata.id"]
-            nic_url = f"https://{server_name_rib}{nic}"
+        for adapter in myjson_members_data:
+            nic_url = f"https://{bmc_address}{adapter['@odata.id']}"
             nic_request = requests.get(nic_url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
             nicdata = nic_request.json()
             if "Supermicro" in nicdata["Manufacturer"]:
-                mydata = nicdata["Controllers"]
-                for item2 in range(0, len(mydata)):
-                    ftdata = mydata[item2]["Links"]["NetworkDeviceFunctions"]
-                    for item3 in range(0, len(ftdata)):
-                        ftdata2 = ftdata[item3]["@odata.id"]
-                        nic2_url = f"https://{server_name_rib}{ftdata2}"
+                controllers = nicdata["Controllers"]
+                for controller in controllers:
+                    functions = controller["Links"]["NetworkDeviceFunctions"]
+                    for function in functions:
+                        nic2_url = f"https://{bmc_address}{function['@odata.id']}"
                         nic2_request = requests.get(nic2_url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
                         nic2data = nic2_request.json()
-                        custom_field = f"AOC_{mydata[0]['Location']['PartLocation']['LocationOrdinalValue']}_{nic2data['Id']}"
+                        custom_field = f"AOC_{controllers[0]['Location']['PartLocation']['LocationOrdinalValue']}_{nic2data['Id']}"
                         if nic2data["Ethernet"]["MACAddress"] != "":
                             nic_list.append(custom_field)
                             nic_list.append(self.nic_port_mapping(custom_field))
@@ -489,12 +466,13 @@ class InventoryContext:
                         nic2_request.close()
             nic_request.close()
         self.netbox_server_dict[server_name_short].update({"nics": nic_list})
-        url = f"https://{server_name_rib}/redfish/v1/Systems/1/EthernetInterfaces"
+        url = f"https://{bmc_address}/redfish/v1/Systems/1/EthernetInterfaces"
         myrequest = requests.get(url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
         myjsondata = myrequest.json()
-        for item in range(0, len(myjson_members_data)):
-            nic = myjsondata["Members"][item]["@odata.id"]
-            nic_url = f"https://{server_name_rib}{nic}"
+        myjson_members_data = myjsondata["Members"]
+        myrequest.close()
+        for interface in myjson_members_data:
+            nic_url = f"https://{bmc_address}{interface['@odata.id']}"
             nic_request = requests.get(nic_url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
             nicdata = nic_request.json()
             if "OnBoard" in nicdata["Name"]:
@@ -515,21 +493,26 @@ class InventoryContext:
         myjson = myrequest.json()
         myrequest.close()
         myworkingdata = myjson["results"]
-        for item in myworkingdata:
-            if item["device_type"]["manufacturer"]["name"] in self.vendor_list:
-                self.netbox_server_dict[item["name"]] = {"device_id": item["id"], "servername": item["name"], "serial": item["serial"]}
-                server_manufacturer = item["device_type"]["manufacturer"]["name"]
+        for entry in myworkingdata:
+            if entry["device_type"]["manufacturer"]["name"] in self.vendor_list:
+                self.netbox_server_dict[entry["name"]] = {"device_id": entry["id"], "servername": entry["name"], "serial": entry["serial"]}
+                server_manufacturer = entry["device_type"]["manufacturer"]["name"]
 
-        for item in self.netbox_server_dict:
-            url = f"{self.url_netbox_ip_device}{item}"
+        for device_name_entry in self.netbox_server_dict:
+            url = f"{self.url_netbox_ip_device}{device_name_entry}"
             myrequest = requests.get(url)
             myjson = myrequest.json()
             myrequest.close()
             myworkingdata = myjson["results"]
-            for internal_counter in range(0, len(myworkingdata)):
-                if myworkingdata[internal_counter]["assigned_object"]["name"] in self.server_rib_matrix:
-                    self.netbox_server_dict[myworkingdata[internal_counter]["assigned_object"]["device"]["name"]].update({"remoteboard": myworkingdata[internal_counter]["description"],
-                                                                                                                    "remoteboard_ip": self.get_ip(myworkingdata[internal_counter]["address"])})
+            for ip_entry in myworkingdata:
+                assigned_obj = ip_entry["assigned_object"]
+                name = assigned_obj["name"]
+                if name in self.server_rib_matrix:
+                    device_name = assigned_obj["device"]["name"]
+                    self.netbox_server_dict[device_name].update({
+                        "remoteboard": ip_entry["description"],
+                        "remoteboard_ip": self.get_ip(ip_entry["address"])
+                    })
 
         if server_manufacturer == "":
             return None
@@ -541,8 +524,8 @@ class InventoryContext:
         return input[:-3]
 
 
-    def get_remoteboard_mac(self, server_manufactorer, server_name_rib):
-        url = f"https://{server_name_rib}{self.remoteboard_uri_key_mapping.get(server_manufactorer).get('uri')}"
+    def get_remoteboard_mac(self, server_manufactorer, bmc_address):
+        url = f"https://{bmc_address}{self.remoteboard_uri_key_mapping.get(server_manufactorer).get('uri')}"
         my_request = requests.get(url, auth=(self.args_user_name, self.args_password), verify=False)
         my_json = my_request.json()
         my_request.close()
@@ -576,16 +559,16 @@ class InventoryContext:
     def netbox_get_interface_mac(self, device_id):
         url = f"{self.url_netbox_device_interface}?device_id={device_id}"
         myrequest = requests.get(url)
-        myjson = myrequest.json()
+        data = myrequest.json()
         myrequest.close()
-        myworkingdata = myjson["results"]
+        interfaces = data["results"]
         netbox_nic_interfaces_dict_helper = {}
 
-        for items in myworkingdata:
-            node_name = items["device"]["name"]
-            if items["connected_endpoints"] is not None:
-                interface_id = (items["id"])
-                result = {"device": device_id, "name": items["name"], "mac_address": items["mac_address"], "mtu": items["mtu"], "description": items["name"]}
+        for interface in interfaces:
+            node_name = interface["device"]["name"]
+            if interface["connected_endpoints"] is not None:
+                interface_id = (interface["id"])
+                result = {"device": device_id, "name": interface["name"], "mac_address": interface["mac_address"], "mtu": interface["mtu"], "description": interface["name"]}
                 netbox_nic_interfaces_dict_helper[interface_id] = result
                 self.netbox_nic_interfaces_dict.update({node_name: netbox_nic_interfaces_dict_helper})
         return
@@ -685,8 +668,8 @@ class InventoryContext:
                             else:
                                 my_new_template_nic_list_counter_increase = 1       # add 1 if all four ports exists, valid for 2 port nic's
 
-                            for myitem2 in my_new_template_nic_list_sorted:
-                                my_new_template_nic_index = (mylist.index(myitem2))
+                            for nic_item in my_new_template_nic_list_sorted:
+                                my_new_template_nic_index = (mylist.index(nic_item))
                                 mylist[my_new_template_nic_index] = self.netbox_network_interface_mapping[my_new_template_nic_list_counter]
                                 my_new_template_nic_list_counter += my_new_template_nic_list_counter_increase
                             break
