@@ -8,7 +8,6 @@ or as an API that listens for requests to check the inventory of a server.
 import argparse
 import logging
 import os
-import re
 import warnings
 import time
 import gc       # Garbage collection module
