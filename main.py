@@ -12,14 +12,16 @@ import warnings
 import time
 import gc       # Garbage collection module
 import sys
-
+from mac_serial_ng import InventoryContext
 from wsgiref.simple_server import make_server, WSGIServer, WSGIRequestHandler
 from socketserver import ThreadingMixIn
 import yaml
 import falcon
+from netbox import NetboxInventoryUpdater  
 
 from handler import WelcomePage, InventoryCollector, HandlerException
 from netbox import NetboxConnection, NetboxConnectionException
+
 
 def get_args():
     """
@@ -191,6 +193,24 @@ def run_inventory_loop(config, connection):
                     collector= InventoryCollector(config, connection)
                     collector.check_server_inventory(server)
 
+                    #Currently if it is not a pod node, we set special_netbox_case to true
+                    special_netbox_case = "ap" in str(server).lower()
+                    if not special_netbox_case:
+                        try:
+                            device_info = NetboxInventoryUpdater(server, netbox_connection).get_device()
+                            if not device_info:
+                                raise NetboxConnectionException(f"Device {server} not found in Netbox")
+                            tags = [tag["name"].lower() for tag in device_info.get("tags", [])]
+                            special_netbox_case = any("pod" in tag for tag in tags)
+                        except NetboxConnectionException as e:
+                            print(f"Warning: Could not determine if device is APOD: {e}")
+
+                    inventory_obj = InventoryContext(NETBOX_ENVIRONMENT, configuration, special_netbox_case)
+
+                    # cut off the FQDN from the server variable
+                    short_server_name = server.split('.')[0]
+                    inventory_obj.runSerialNumberScript(short_server_name)
+
                 except (HandlerException, NetboxConnectionException) as err:
                     logging.error(err)
 
@@ -210,12 +230,15 @@ def run_inventory_loop(config, connection):
 if __name__ == '__main__':
 
     call_args = get_args()
-
+   
     warnings.filterwarnings("ignore")
 
     enable_logging(call_args.logging, call_args.debug)
 
     configuration = get_config(call_args.config)
+    netbox_url = configuration.get("netbox", {}).get("url", "")
+    NETBOX_ENVIRONMENT = "staging" if "staging" in netbox_url else "global"
+
     if call_args.servers:
         configuration['servers'] = call_args.servers
 
@@ -225,4 +248,4 @@ if __name__ == '__main__':
         falcon_app(configuration, netbox_connection)
     else:
         run_inventory_loop(configuration, netbox_connection)
-    
+
