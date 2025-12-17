@@ -70,8 +70,6 @@ def get_args():
         required=False
     )
 
-    parser.add_argument("-q", "--query", type=str, required=True, help="Pod or node name.")
-
     arguments = parser.parse_args()
 
     return arguments
@@ -195,6 +193,24 @@ def run_inventory_loop(config, connection):
                     collector= InventoryCollector(config, connection)
                     collector.check_server_inventory(server)
 
+                    #Currently if it is not a pod node, we set special_netbox_case to true
+                    special_netbox_case = "ap" in str(server).lower()
+                    if not special_netbox_case:
+                        try:
+                            device_info = NetboxInventoryUpdater(server, netbox_connection).get_device()
+                            if not device_info:
+                                raise NetboxConnectionException(f"Device {server} not found in Netbox")
+                            tags = [tag["name"].lower() for tag in device_info.get("tags", [])]
+                            special_netbox_case = any("pod" in tag for tag in tags)
+                        except NetboxConnectionException as e:
+                            print(f"Warning: Could not determine if device is APOD: {e}")
+
+                    inventory_obj = InventoryContext(NETBOX_ENVIRONMENT, configuration, special_netbox_case)
+
+                    # cut off the FQDN from the server variable
+                    short_server_name = server.split('.')[0]
+                    inventory_obj.runSerialNumberScript(short_server_name)
+
                 except (HandlerException, NetboxConnectionException) as err:
                     logging.error(err)
 
@@ -228,23 +244,8 @@ if __name__ == '__main__':
 
     netbox_connection = NetboxConnection(configuration)
 
-    #Currently if it is not a pod node, we set special_netbox_case to true
-    special_netbox_case = "ap" in str(call_args.query).lower()
-    if not special_netbox_case:
-        try:
-            device_info = NetboxInventoryUpdater(call_args.query, netbox_connection).get_device()
-            if not device_info:
-                raise NetboxConnectionException(f"Device {call_args.query} not found in Netbox")
-            tags = [tag["name"].lower() for tag in device_info.get("tags", [])]
-            special_netbox_case = any("pod" in tag for tag in tags)
-        except NetboxConnectionException as e:
-            print(f"Warning: Could not determine if device is APOD: {e}")
-
-    inventory_obj = InventoryContext(NETBOX_ENVIRONMENT, configuration, special_netbox_case)
-
     if call_args.api:
         falcon_app(configuration, netbox_connection)
     else:
-        inventory_obj.runSerialNumberScript(call_args.query)
         run_inventory_loop(configuration, netbox_connection)
 
