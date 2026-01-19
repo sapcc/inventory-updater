@@ -6,6 +6,12 @@ import urllib3
 from natsort import natsorted
 from typing import Optional, Tuple
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+logger = logging.getLogger(__name__)
+
 urllib3.disable_warnings()
 
 class InventoryContext:
@@ -31,8 +37,8 @@ class InventoryContext:
         try:
             self.api_netbox_key = os.environ["NETBOX_API_TOKEN"]
         except KeyError:
-            print("No NETBOX_API_TOKEN environment variable set, please set one and try again")
-            quit(1)
+            logger.error("No NETBOX_API_TOKEN environment variable set, please set one and try again")
+            sys.exit(1)
 
         self.nic_port_mapping_matrix = {
             "Integrated NIC 1 Port 1 Partition 1": "L1",
@@ -238,7 +244,7 @@ class InventoryContext:
         headers = {'content-type': 'application/json'}
         response = requests.post(url, json=payload, headers=headers, verify=False)
         if response.headers.get("x-auth-token") is None:
-            logging.error("Not able to create token")
+            logger.error("Not able to create token")
             sys.exit(1)
         data = response.json()
         my_session_id = data["Id"]
@@ -487,7 +493,6 @@ class InventoryContext:
 
 
     def netbox_get_info(self, pod):
-        global server_manufacturer
         url = f"{self.url_netbox_device_q}{pod}"
         myrequest = requests.get(url)
         myjson = myrequest.json()
@@ -496,7 +501,7 @@ class InventoryContext:
         for entry in myworkingdata:
             if entry["device_type"]["manufacturer"]["name"] in self.vendor_list:
                 self.netbox_server_dict[entry["name"]] = {"device_id": entry["id"], "servername": entry["name"], "serial": entry["serial"]}
-                server_manufacturer = entry["device_type"]["manufacturer"]["name"]
+                self.server_manufacturer = entry["device_type"]["manufacturer"]["name"]
 
         for device_name_entry in self.netbox_server_dict:
             url = f"{self.url_netbox_ip_device}{device_name_entry}"
@@ -514,10 +519,10 @@ class InventoryContext:
                         "remoteboard_ip": self.get_ip(ip_entry["address"])
                     })
 
-        if server_manufacturer == "":
+        if not self.server_manufacturer:
             return None
 
-        return server_manufacturer
+        return self.server_manufacturer
 
 
     def get_ip(self, input):
@@ -552,7 +557,7 @@ class InventoryContext:
             result = requests.patch(url, json=payload, headers=head)
             result.close()
         except Exception as e:
-            print(f"Error writing {url}{payload}: {e}")
+            logger.error("Error writing %s %s: %s", url, payload, e)
         return
 
 
@@ -582,14 +587,14 @@ class InventoryContext:
             result = requests.patch(url, json=payload, headers=head)
             result.close()
         except Exception as e:
-            print(f"Error writing MAC {url} - {payload}: {e}")
+            logger.error("Error writing MAC %s - %s: %s", url, payload, e)
         return
 
 
     def generic_get_infos(self, vendor: str):
         for server in self.netbox_server_dict:
             try:
-                print(f"\rGetting Infos from Netbox for \t{server}", end="")
+                logger.info("Getting Infos from Netbox for %s", server)
 
                 board_address = (
                     self.netbox_server_dict[server]["remoteboard_ip"]
@@ -604,7 +609,7 @@ class InventoryContext:
                 # Get system info
                 self.server_redfish_get_system_info(board_address, server, session_x_auth_token, vendor)
 
-                print(f"\rCollecting Redfish Infos from \t{server}", end="")
+                logger.info("Collecting Redfish Infos from %s", server)
 
                 # Vendor-specific network interface logic
                 if vendor == "HPE":
@@ -620,17 +625,14 @@ class InventoryContext:
                 self.session_delete_x_auth_session(board_address, session_x_auth_token, session_uri, session_id)
 
             except Exception as e:
-                print("\tError", e)
+                logger.error("Error processing server %s: %s", server, e)
 
 
     def runSerialNumberScript(self, query):
-        print("Getting infos from Netbox / All vPod nodes")
-        print("")
-        server_manufacturer = self.netbox_get_info(query)
-        self.generic_get_infos(server_manufacturer)
+        logger.info("Getting infos from Netbox / All vPod nodes")
+        self.netbox_get_info(query)
+        self.generic_get_infos(self.server_manufacturer)
 
-        print("")
-        print("")
         for item in self.netbox_server_dict:
             isNICNot4Port = False
             try:
@@ -643,15 +645,16 @@ class InventoryContext:
                 # noinspection SyntaxError
                 if self.args_write_flag:
                     if self.netbox_server_dict[item]["serial"] != serial_number:
-                        print(f"Netbox serial number NOT MATCHING.\t{self.netbox_server_dict[item]['servername']}\t{self.netbox_server_dict[item]['serial']} != {serial_number}")
+                        logger.warning("Netbox serial number NOT MATCHING for server %s", self.netbox_server_dict[item]["servername"])
                         if self.netbox_server_dict[item]["serial"] == "":
                             self.netbox_write_serial_number(device_id, serial_number)
-                            print(f"Netbox serial number empty. Writing serial number to Netbox. {item}")
+                            logger.info("Netbox serial number empty. Writing serial number to Netbox. %s", item)
                         if self.args_force_flag:
                             self.netbox_write_serial_number(device_id, serial_number)
-                            print(f"Mismatch serial number in Netbox. Changing in Netbox. {item}")
+                            logger.info("Mismatch serial number in Netbox. Changing in Netbox. %s", item)
                     else:
-                        print(device_id, self.netbox_server_dict[item]["serial"], serial_number)
+                        logger.info("%s %s %s", device_id, self.netbox_server_dict[item]["serial"], serial_number)
+
                     mylist = self.netbox_server_dict[item]["nics"]
                     self.netbox_get_interface_mac(self.netbox_server_dict[item]["device_id"])
                     for inner_loop in self.netbox_nic_interfaces_dict[item]:
@@ -675,7 +678,7 @@ class InventoryContext:
                             break
 
                     mylist.append("remoteboard")
-                    mylist.append(self.get_remoteboard_mac(server_manufacturer, self.netbox_server_dict[item]["remoteboard"]))
+                    mylist.append(self.get_remoteboard_mac(self.server_manufacturer, self.netbox_server_dict[item]["remoteboard"]))
 
                     for inner_dict_key in self.netbox_nic_interfaces_dict[item]:
                         if self.netbox_nic_interfaces_dict[item][inner_dict_key]["name"] not in mylist:
@@ -696,26 +699,24 @@ class InventoryContext:
                             payload_data = self.netbox_nic_interfaces_dict[item][inner_dict_key]
                             interface_id = inner_dict_key
                             if payload_data["mac_address"] != mac_address:
-                                print(f"Netbox MAC-Address NOT MATCHING.\t{self.netbox_server_dict[item]['servername']}\t{payload_data['name']}\t{payload_data['mac_address']} != {mac_address}")
+                                logger.warning("Netbox MAC-Address mismatch for server=%s interface=%s", self.netbox_server_dict[item]['servername'], payload_data['name'])
                                 if payload_data["mac_address"] is None:
                                     if payload_data["name"] == "L1":
                                         self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
-                                        print("No MAC-Address in Netbox. Writing MAC to Netbox {}".format(item))
+                                        logger.info("No MAC-Address in Netbox. Writing MAC to Netbox %s", item)
                                     elif payload_data["name"] == "L2":
                                         if self.special_netbox_case:
                                             self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
-                                            print("No MAC-Address in Netbox. Writing MAC to Netbox {}".format(item))
+                                            logger.info("No MAC-Address in Netbox. Writing MAC to Netbox %s", item)
                                         else:
                                             pass
                                     elif payload_data["name"] == "remoteboard":
                                         self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
                                     else:
                                         self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 9000)
-                                        print(f"No MAC-Address in Netbox. Writing MAC to Netbox {item}")
+                                        logger.info("No MAC-Address in Netbox. Writing MAC to Netbox %s", item)
                                         if isNICNot4Port:
-                                            print("")
-                                            print("No 4 Port NIC!!!!")
-                                            print("")
+                                            logger.info("No 4 Port NIC!!!!")
                                             isNICNot4Port = False
                             if self.args_force_flag:
                                 if payload_data["name"] == "L1":
@@ -729,10 +730,10 @@ class InventoryContext:
                                     self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
                                 else:
                                     self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 9000)
-    #                            print("Mismatch MAC in Netbox. Changing in Netbox {}".format(item))
                         else:
                             pass
-            except Exception:
-                pass
-            self.netbox_nic_interfaces_dict.clear()
-        print("Done")
+            except Exception as e:
+                logger.error("Error processing server %s: %s", item, e)
+            finally:
+                self.netbox_nic_interfaces_dict.clear()
+        logger.info("Done")
