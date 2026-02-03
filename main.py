@@ -207,9 +207,7 @@ def run_inventory_loop(config, connection):
 
                     inventory_obj = InventoryContext(NETBOX_ENVIRONMENT, configuration, special_netbox_case)
 
-                    # cut off the FQDN from the server variable
-                    short_server_name = server.split('.')[0]
-                    inventory_obj.runSerialNumberScript(short_server_name)
+                    inventory_obj.runSerialNumberScript(server)
 
                 except (HandlerException, NetboxConnectionException) as err:
                     logging.error(err)
