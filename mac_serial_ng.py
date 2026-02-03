@@ -28,10 +28,12 @@ class InventoryContext:
         if self.args_force_flag:
             self.args_write_flag = True
 
-        try:
-            self.api_netbox_key = os.environ["NETBOX_API_TOKEN"]
-        except KeyError:
-            logging.error("No NETBOX_API_TOKEN environment variable set, please set one and try again")
+        self.api_netbox_key = os.getenv(
+            "NETBOX_TOKEN",
+            configuration.get('netbox', {}).get('token')
+        )
+        if not self.api_netbox_key:
+            logging.error("No NETBOX_TOKEN environment variable or config token set")
             sys.exit(1)
 
         self.nic_port_mapping_matrix = {
@@ -486,8 +488,8 @@ class InventoryContext:
         self.netbox_server_dict[server_name_short].update({"nics": nic_list})
 
 
-    def netbox_get_info(self, pod):
-        url = f"{self.url_netbox_device_q}{pod}"
+    def netbox_get_info(self, server_name):
+        url = f"{self.url_netbox_device_q}{server_name}"
         myrequest = requests.get(url)
         myjson = myrequest.json()
         myrequest.close()
@@ -547,11 +549,12 @@ class InventoryContext:
         head = {"Authorization": "Token {}".format(self.api_netbox_key), "Content-Type": "application/json", "Accept": "application/json"}
         url = f"{self.url_netbox_device}{device_id}/"
         payload = {"serial": serial_number}
+        logging.info("  Writing serial number to Netbox %s", url)
         try:
             result = requests.patch(url, json=payload, headers=head)
             result.close()
         except Exception as e:
-            logging.error("Error writing %s %s: %s", url, payload, e)
+            logging.error("  Error writing %s %s: %s", url, payload, e)
         return
 
 
@@ -577,18 +580,19 @@ class InventoryContext:
         head = {"Authorization": "Token {}".format(self.api_netbox_key), "Content-Type": "application/json", "Accept": "application/json"}
         url = f"{self.url_netbox_device_interface}{device_interface_id}/"
         payload.update({"mac_address": mac, "mtu": mtu_size})
+        logging.info("  Writing MAC to Netbox %s", url)
         try:
             result = requests.patch(url, json=payload, headers=head)
             result.close()
         except Exception as e:
-            logging.error("Error writing MAC %s - %s: %s", url, payload, e)
+            logging.error("  Error writing MAC %s - %s: %s", url, payload, e)
         return
 
 
     def generic_get_infos(self, vendor: str):
         for server in self.netbox_server_dict:
             try:
-                logging.info("Getting Infos from Netbox for %s", server)
+                logging.info("  %s: Getting Infos from Netbox", server)
 
                 board_address = (
                     self.netbox_server_dict[server]["remoteboard_ip"]
@@ -603,7 +607,7 @@ class InventoryContext:
                 # Get system info
                 self.server_redfish_get_system_info(board_address, server, session_x_auth_token, vendor)
 
-                logging.info("Collecting Redfish Infos from %s", server)
+                logging.info("  %s: Collecting Redfish Infos", server)
 
                 # Vendor-specific network interface logic
                 if vendor == "HPE":
@@ -619,12 +623,16 @@ class InventoryContext:
                 self.session_delete_x_auth_session(board_address, session_x_auth_token, session_uri, session_id)
 
             except Exception as e:
-                logging.error("Error processing server %s: %s", server, e)
+                logging.error("  Error processing server %s: %s", server, e)
 
 
-    def runSerialNumberScript(self, query):
-        logging.info("Getting infos from Netbox / All vPod nodes")
-        self.netbox_get_info(query)
+    def runSerialNumberScript(self, server):
+        logging.info("==> Server %s: Getting Serial# and MAC-Addresses", server)
+        
+        # cut off the FQDN from the server variable
+        short_server_name = server.split('.')[0]
+
+        self.netbox_get_info(short_server_name)
         self.generic_get_infos(self.server_manufacturer)
 
         for item in self.netbox_server_dict:
@@ -636,98 +644,103 @@ class InventoryContext:
                 mac_address = None
                 device_id = self.netbox_server_dict[item]["device_id"]
                 serial_number = self.netbox_server_dict[item]["serial_redfish"]
-                # noinspection SyntaxError
-                if self.args_write_flag:
-                    if self.netbox_server_dict[item]["serial"] != serial_number:
-                        logging.warning("Netbox serial number NOT MATCHING for server %s", self.netbox_server_dict[item]["servername"])
-                        if self.netbox_server_dict[item]["serial"] == "":
-                            self.netbox_write_serial_number(device_id, serial_number)
-                            logging.info("Netbox serial number empty. Writing serial number to Netbox. %s", item)
-                        if self.args_force_flag:
-                            self.netbox_write_serial_number(device_id, serial_number)
-                            logging.info("Mismatch serial number in Netbox. Changing in Netbox. %s", item)
-                    else:
-                        logging.info("%s %s %s", device_id, self.netbox_server_dict[item]["serial"], serial_number)
 
-                    mylist = self.netbox_server_dict[item]["nics"]
-                    self.netbox_get_interface_mac(self.netbox_server_dict[item]["device_id"])
-                    for inner_loop in self.netbox_nic_interfaces_dict[item]:
-                        if "NIC" in self.netbox_nic_interfaces_dict[item][inner_loop]["name"]:
-                            for myitem in mylist:
-                                if "PCI" in myitem:
-                                    self.my_new_template_nic_list.append(myitem)
-                            my_new_template_nic_list_sorted = natsorted(self.my_new_template_nic_list)
-                            my_new_template_nic_list_counter = 0
+                if  not self.args_write_flag:
+                    logging.info("  Dry-Run mode - No changes will be made to Netbox")
+                    continue
 
-                            if len(my_new_template_nic_list_sorted) < 4:            # > 4 means a list with all 4 ports, in the new case we only have 2 entries in the list
-                                my_new_template_nic_list_counter_increase = 1       # add 2 otherwise the list will map wrong port, valid for 2 entries
-                                isNICNot4Port = True
-                            else:
-                                my_new_template_nic_list_counter_increase = 1       # add 1 if all four ports exists, valid for 2 port nic's
+                if self.netbox_server_dict[item]["serial"] != serial_number:
+                    logging.warning("  %s: Netbox serial number NOT MATCHING", self.netbox_server_dict[item]["servername"])
+                    if self.netbox_server_dict[item]["serial"] == "":
+                        self.netbox_write_serial_number(device_id, serial_number)
+                        logging.info("  %s: Netbox serial number empty. Writing serial number to Netbox.", self.netbox_server_dict[item]["servername"])
+                    if self.args_force_flag:
+                        self.netbox_write_serial_number(device_id, serial_number)
+                        logging.info("  %s: Mismatch serial number in Netbox. Changing in Netbox.", self.netbox_server_dict[item]["servername"])
+                else:
+                    logging.info("  %s: Netbox serial number matching", self.netbox_server_dict[item]["servername"])
 
-                            for nic_item in my_new_template_nic_list_sorted:
-                                my_new_template_nic_index = (mylist.index(nic_item))
-                                mylist[my_new_template_nic_index] = self.netbox_network_interface_mapping[my_new_template_nic_list_counter]
-                                my_new_template_nic_list_counter += my_new_template_nic_list_counter_increase
-                            break
+                mylist = self.netbox_server_dict[item]["nics"]
+                self.netbox_get_interface_mac(self.netbox_server_dict[item]["device_id"])
+                for inner_loop in self.netbox_nic_interfaces_dict[item]:
+                    if "NIC" in self.netbox_nic_interfaces_dict[item][inner_loop]["name"]:
+                        for myitem in mylist:
+                            if "PCI" in myitem:
+                                self.my_new_template_nic_list.append(myitem)
+                        my_new_template_nic_list_sorted = natsorted(self.my_new_template_nic_list)
+                        my_new_template_nic_list_counter = 0
 
-                    mylist.append("remoteboard")
-                    mylist.append(self.get_remoteboard_mac(self.server_manufacturer, self.netbox_server_dict[item]["remoteboard"]))
-
-                    for inner_dict_key in self.netbox_nic_interfaces_dict[item]:
-                        if self.netbox_nic_interfaces_dict[item][inner_dict_key]["name"] not in mylist:
-                            break
-                        mylist_index = (mylist.index(self.netbox_nic_interfaces_dict[item][inner_dict_key]["name"]))
-                        mac_address = str.upper(mylist[mylist_index + 1])
-                        if "NIC" in self.netbox_nic_interfaces_dict[item][inner_dict_key]["description"]:
-
-                            if len(my_new_template_nic_list_sorted) < 4: # same convention 2 / 4 Ports, needs to be mapped different. WTF
-                                self.netbox_nic_interfaces_dict[item][inner_dict_key]["description"] = my_new_template_nic_list_sorted[
-                                    self.netbox_nic_description_mapping_short(self.netbox_nic_interfaces_dict[item][inner_dict_key]["description"])]
-                                isNICNot4Port = True
-                            else:
-                                self.netbox_nic_interfaces_dict[item][inner_dict_key]["description"] = my_new_template_nic_list_sorted[
-                                    self.netbox_nic_description_mapping(self.netbox_nic_interfaces_dict[item][inner_dict_key]["description"])]
-
-                        if self.args_write_flag:
-                            payload_data = self.netbox_nic_interfaces_dict[item][inner_dict_key]
-                            interface_id = inner_dict_key
-                            if payload_data["mac_address"] != mac_address:
-                                logging.warning("Netbox MAC-Address mismatch for server=%s interface=%s", self.netbox_server_dict[item]['servername'], payload_data['name'])
-                                if payload_data["mac_address"] is None:
-                                    if payload_data["name"] == "L1":
-                                        self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
-                                        logging.info("No MAC-Address in Netbox. Writing MAC to Netbox %s", item)
-                                    elif payload_data["name"] == "L2":
-                                        if self.special_netbox_case:
-                                            self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
-                                            logging.info("No MAC-Address in Netbox. Writing MAC to Netbox %s", item)
-                                        else:
-                                            pass
-                                    elif payload_data["name"] == "remoteboard":
-                                        self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
-                                    else:
-                                        self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 9000)
-                                        logging.info("No MAC-Address in Netbox. Writing MAC to Netbox %s", item)
-                                        if isNICNot4Port:
-                                            logging.info("No 4 Port NIC!!!!")
-                                            isNICNot4Port = False
-                            if self.args_force_flag:
-                                if payload_data["name"] == "L1":
-                                    self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
-                                elif payload_data["name"] == "L2":
-                                    if self.special_netbox_case:
-                                        self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
-                                    else:
-                                        pass
-                                elif payload_data["name"] == "remoteboard":
-                                    self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
-                                else:
-                                    self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 9000)
+                        if len(my_new_template_nic_list_sorted) < 4:            # > 4 means a list with all 4 ports, in the new case we only have 2 entries in the list
+                            my_new_template_nic_list_counter_increase = 1       # add 2 otherwise the list will map wrong port, valid for 2 entries
+                            isNICNot4Port = True
                         else:
-                            pass
+                            my_new_template_nic_list_counter_increase = 1       # add 1 if all four ports exists, valid for 2 port nic's
+
+                        for nic_item in my_new_template_nic_list_sorted:
+                            my_new_template_nic_index = (mylist.index(nic_item))
+                            mylist[my_new_template_nic_index] = self.netbox_network_interface_mapping[my_new_template_nic_list_counter]
+                            my_new_template_nic_list_counter += my_new_template_nic_list_counter_increase
+                        break
+
+                mylist.append("remoteboard")
+                mylist.append(self.get_remoteboard_mac(self.server_manufacturer, self.netbox_server_dict[item]["remoteboard"]))
+
+                for inner_dict_key in self.netbox_nic_interfaces_dict[item]:
+
+                    if self.netbox_nic_interfaces_dict[item][inner_dict_key]["name"] not in mylist:
+                        break
+
+                    mylist_index = (mylist.index(self.netbox_nic_interfaces_dict[item][inner_dict_key]["name"]))
+                    mac_address = str.upper(mylist[mylist_index + 1])
+
+                    if "NIC" in self.netbox_nic_interfaces_dict[item][inner_dict_key]["description"]:
+
+                        if len(my_new_template_nic_list_sorted) < 4: # same convention 2 / 4 Ports, needs to be mapped different. WTF
+                            self.netbox_nic_interfaces_dict[item][inner_dict_key]["description"] = my_new_template_nic_list_sorted[
+                                self.netbox_nic_description_mapping_short(self.netbox_nic_interfaces_dict[item][inner_dict_key]["description"])]
+                            isNICNot4Port = True
+                        else:
+                            self.netbox_nic_interfaces_dict[item][inner_dict_key]["description"] = my_new_template_nic_list_sorted[
+                                self.netbox_nic_description_mapping(self.netbox_nic_interfaces_dict[item][inner_dict_key]["description"])]
+
+                    if not self.args_write_flag:
+                        logging.info("  Dry-Run mode - No changes will be made to Netbox")
+                        continue
+
+                    payload_data = self.netbox_nic_interfaces_dict[item][inner_dict_key]
+                    interface_id = inner_dict_key
+                    if payload_data["mac_address"] != mac_address:
+                        logging.warning("  Netbox MAC-Address mismatch for server=%s interface=%s", self.netbox_server_dict[item]['servername'], payload_data['name'])
+                        if payload_data["mac_address"] is None:
+                            if payload_data["name"] == "L1":
+                                self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
+                                logging.info("  No MAC-Address in Netbox. Writing MAC to Netbox %s", item)
+                            elif payload_data["name"] == "L2" and self.special_netbox_case:
+                                self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
+                                logging.info("  No MAC-Address in Netbox. Writing MAC to Netbox %s", item)
+                            elif payload_data["name"] == "remoteboard":
+                                self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
+                            else:
+                                self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 9000)
+                                logging.info("  No MAC-Address in Netbox. Writing MAC to Netbox %s", item)
+                                if isNICNot4Port:
+                                    logging.info("  No 4 Port NIC!!!!")
+                                    isNICNot4Port = False
+
+                    if not self.args_force_flag:
+                        continue
+
+                    if payload_data["name"] == "L1":
+                        self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
+                    elif payload_data["name"] == "L2" and self.special_netbox_case:
+                        self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
+                    elif payload_data["name"] == "remoteboard":
+                        self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 1500)
+                    else:
+                        self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 9000)
+
             except Exception as e:
-                logging.error("Error processing server %s: %s", item, e)
+                logging.error("  Error processing server %s: %s", item, e)
             finally:
                 self.netbox_nic_interfaces_dict.clear()
-        logging.info("Done")
+        return
