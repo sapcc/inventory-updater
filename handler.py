@@ -5,6 +5,7 @@ import logging
 import socket
 import re
 import os
+import sys
 import time
 import traceback
 import falcon
@@ -51,11 +52,11 @@ class InventoryCollector:
 
         if not self.usr:
             logging.error("No user found in environment and config file!")
-            exit(1)
+            sys.exit(1)
 
         if not self.pwd:
             logging.error("No password found in environment and config file!")
-            exit(1)
+            sys.exit(1)
 
 
     def on_get(self, req, resp):
