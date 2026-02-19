@@ -123,12 +123,11 @@ class RedfishIventoryCollector:
                 )
                 result.raise_for_status()
 
-            except requests.exceptions.ConnectionError as excptn:
+            except requests.exceptions.ConnectionError:
                 logging.error(
-                    "  Target %s: Error getting an auth token from server %s: %s",
+                    "  Target %s: Error getting an auth token from server %s",
                     self.target,
-                    self.ip_address,
-                    excptn
+                    self.ip_address
                 )
                 self._basic_auth = True
 
@@ -224,7 +223,6 @@ class RedfishIventoryCollector:
                     err.response.url,
                     err.response.status_code
                 )
-                logging.error("  Target %s: %s", self.target, err.response.text)
             else:
                 logging.error("  Target %s: Unable to connect to URL %s", self.target, url)
 

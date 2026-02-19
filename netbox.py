@@ -29,6 +29,11 @@ class NetboxConnection:
 
         logging.info("Establishing connection to Netbox %s", self.netbox_url)
         netbox_token = os.getenv("NETBOX_TOKEN", config['netbox']['token'])
+
+        if not netbox_token:
+            logging.error("No NETBOX_TOKEN found in environment or config file")
+            sys.exit(1)
+
         self._headers = {
             'Content-type': 'application/json',
             "Authorization": f"Token {netbox_token}"
@@ -57,11 +62,8 @@ class NetboxConnection:
         except requests.exceptions.HTTPError as err:
             logging.error ("  Netbox Error: %s", err)
             if response:
-                logging.error ("  Response : %s: %s", err, response.content)
+                logging.error ("  Response Status: %s", err)
 
-            logging.debug ("    Params: %s", params)
-            logging.debug ("    Data: %s", data)
-            logging.debug ("    Response: %s", response.content)
             raise NetboxConnectionException(
                 f"Netbox HTTP Error: {err}"
             ) from err

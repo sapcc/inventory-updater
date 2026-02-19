@@ -19,6 +19,13 @@ class InventoryContext:
         self.args_user_name = os.getenv("REDFISH_USERNAME", configuration.get('redfish_username'))
         self.args_password = os.getenv("REDFISH_PASSWORD", configuration.get('redfish_password'))
 
+        if not self.args_user_name:
+            logging.error("No REDFISH_USERNAME found in environment or config file")
+            sys.exit(1)
+        if not self.args_password:
+            logging.error("No REDFISH_PASSWORD found in environment or config file")
+            sys.exit(1)
+
         self.args_write_flag = os.getenv("WRITE", str(configuration.get("write", False))).lower() == "true"
         self.args_force_flag = os.getenv("FORCE", str(configuration.get("force", False))).lower() == "true"
         self.args_iponly_flag = os.getenv("IPONLY", str(configuration.get("iponly", False))).lower() == "true"
@@ -33,7 +40,7 @@ class InventoryContext:
             configuration.get('netbox', {}).get('token')
         )
         if not self.api_netbox_key:
-            logging.error("No NETBOX_TOKEN environment variable or config token set")
+            logging.error("No NETBOX_TOKEN found in environment or config file")
             sys.exit(1)
 
         self.nic_port_mapping_matrix = {

@@ -51,11 +51,11 @@ class InventoryCollector:
         self.pwd = os.getenv("REDFISH_PASSWORD", self.config.get('redfish_password'))
 
         if not self.usr:
-            logging.error("No user found in environment and config file!")
+            logging.error("No REDFISH_USERNAME found in environment or config file")
             sys.exit(1)
 
         if not self.pwd:
-            logging.error("No password found in environment and config file!")
+            logging.error("No REDFISH_PASSWORD found in environment or config file")
             sys.exit(1)
 
 
