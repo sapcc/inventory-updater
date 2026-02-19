@@ -1,6 +1,7 @@
 import logging
 import sys
 import os
+import re
 import requests
 import urllib3
 from natsort import natsorted
@@ -44,150 +45,6 @@ class InventoryContext:
             logging.error("No NETBOX_TOKEN found in environment or config file")
             sys.exit(1)
 
-        self.nic_port_mapping_matrix = {
-            "Integrated NIC 1 Port 1 Partition 1": "L1",
-            "Integrated NIC 1 Port 2 Partition 1": "L2",
-            "Integrated NIC 1 Port 3 Partition 1": "L3",
-            "Integrated NIC 1 Port 4 Partition 1": "L4",
-            "Embedded NIC 1 Port 1 Partition 1": "L1",
-            "Embedded NIC 1 Port 2 Partition 1": "L2",
-            "Embedded NIC 1 Port 3 Partition 1": "L3",
-            "Embedded NIC 1 Port 4 Partition 1": "L4",
-            "NIC in Slot 1 Port 1 Partition 1": "PCI1-P1",
-            "NIC in Slot 1 Port 2 Partition 1": "PCI1-P2",
-            "NIC in Slot 2 Port 1 Partition 1": "PCI2-P1",
-            "NIC in Slot 2 Port 2 Partition 1": "PCI2-P2",
-            "NIC in Slot 3 Port 1 Partition 1": "PCI3-P1",
-            "NIC in Slot 3 Port 2 Partition 1": "PCI3-P2",
-            "NIC in Slot 4 Port 1 Partition 1": "PCI4-P1",
-            "NIC in Slot 4 Port 2 Partition 1": "PCI4-P2",
-            "NIC in Slot 5 Port 1 Partition 1": "PCI5-P1",
-            "NIC in Slot 5 Port 2 Partition 1": "PCI5-P2",
-            "NIC in Slot 6 Port 1 Partition 1": "PCI6-P1",
-            "NIC in Slot 6 Port 2 Partition 1": "PCI6-P2",
-            "NIC in Slot 7 Port 1 Partition 1": "PCI7-P1",
-            "NIC in Slot 7 Port 2 Partition 1": "PCI7-P2",
-            "NIC in Slot 8 Port 1 Partition 1": "PCI8-P1",
-            "NIC in Slot 8 Port 2 Partition 1": "PCI8-P2",
-            "NIC in Slot 9 Port 1 Partition 1": "PCI9-P1",
-            "NIC in Slot 9 Port 2 Partition 1": "PCI9-P2",
-            "NIC in Slot 32 Port 1 Partition 1": "PCI32-P1",
-            "NIC in Slot 32 Port 2 Partition 1": "PCI32-P2",
-            "NIC in Slot 34 Port 1 Partition 1": "PCI34-P1",
-            "NIC in Slot 34 Port 2 Partition 1": "PCI34-P2",
-            "Intel_slot-1_1.1": "L1",
-            "Intel_slot-1_2.1": "L2",
-            "Intel_slot-1_3.1": "L3",
-            "Intel_slot-1_4.1": "L4",
-            "Intel_slot-2_1.1": "L1",
-            "Intel_slot-2_2.1": "L2",
-            "Intel_slot-2_3.1": "L3",
-            "Intel_slot-2_4.1": "L4",
-            "Intel_slot-3_1.1": "L1",
-            "Intel_slot-3_2.1": "L2",
-            "Intel_slot-3_3.1": "L3",
-            "Intel_slot-3_4.1": "L4",
-            "Intel_slot-4_1.1": "L1",
-            "Intel_slot-4_2.1": "L2",
-            "Intel_slot-4_3.1": "L3",
-            "Intel_slot-4_4.1": "L4",
-            "Intel_slot-5_1.1": "L1",
-            "Intel_slot-5_2.1": "L2",
-            "Intel_slot-5_3.1": "L3",
-            "Intel_slot-5_4.1": "L4",
-            "Intel_slot-6_1.1": "L1",
-            "Intel_slot-6_2.1": "L2",
-            "Intel_slot-6_3.1": "L3",
-            "Intel_slot-6_4.1": "L4",
-            "Intel_slot-7_1.1": "L1",
-            "Intel_slot-7_2.1": "L2",
-            "Intel_slot-7_3.1": "L3",
-            "Intel_slot-7_4.1": "L4",
-            "Intel_slot-8_1.1": "L1",
-            "Intel_slot-8_2.1": "L2",
-            "Intel_slot-8_3.1": "L3",
-            "Intel_slot-8_4.1": "L4",
-            "Intel_slot-9_1.1": "L1",
-            "Intel_slot-9_2.1": "L2",
-            "Intel_slot-9_3.1": "L3",
-            "Intel_slot-9_4.1": "L4",
-            "Intel_slot-10_1.1": "L1",
-            "Intel_slot-10_2.1": "L2",
-            "Intel_slot-10_3.1": "L3",
-            "Intel_slot-10_4.1": "L4",
-            "Intel_slot-13_1.1": "L1",
-            "Intel_slot-13.2.1": "L2",
-            "Intel_slot-13_3.1": "L3",
-            "Intel_slot-13_4.1": "L4",
-            "Mellanox_slot-1_1.1": "PCI1-P1",
-            "Mellanox_slot-1_2.1": "PCI1-P2",
-            "Mellanox_slot-2_1.1": "PCI2-P1",
-            "Mellanox_slot-2_2.1": "PCI2-P2",
-            "Mellanox_slot-3_1.1": "PCI3-P1",
-            "Mellanox_slot-3_2.1": "PCI3-P2",
-            "Mellanox_slot-4_1.1": "PCI4-P1",
-            "Mellanox_slot-4_2.1": "PCI4-P2",
-            "Mellanox_slot-5_1.1": "PCI5-P1",
-            "Mellanox_slot-5_2.1": "PCI5-P2",
-            "Mellanox_slot-6_1.1": "PCI6-P1",
-            "Mellanox_slot-6_2.1": "PCI6-P2",
-            "Mellanox_slot-7_1.1": "PCI7-P1",
-            "Mellanox_slot-7_2.1": "PCI7-P2",
-            "Mellanox_slot-13_1.1": "PCI13-P1",
-            "Mellanox_slot-13_2.1": "PCI13-P2",
-            "Broadcom_slot-1_1.1": "PCI1-P1",
-            "Broadcom_slot-1_2.1": "PCI1-P2",
-            "Broadcom_slot-2_1.1": "PCI2-P1",
-            "Broadcom_slot-2_2.1": "PCI2-P2",
-            "Broadcom_slot-3_1.1": "PCI3-P1",
-            "Broadcom_slot-3_2.1": "PCI3-P2",
-            "Broadcom_slot-4_1.1": "PCI4-P1",
-            "Broadcom_slot-4_2.1": "PCI4-P2",
-            "Broadcom_slot-5_1.1": "PCI5-P1",
-            "Broadcom_slot-5_2.1": "PCI5-P2",
-            "Broadcom_slot-6_1.1": "PCI6-P1",
-            "Broadcom_slot-6_2.1": "PCI6-P2",
-            "Broadcom_slot-7_1.1": "PCI7-P1",
-            "Broadcom_slot-7_2.1": "PCI7-P2",
-            "Broadcom_slot-8_1.1": "PCI8-P1",
-            "Broadcom_slot-8_2.1": "PCI8-P2",
-            "Broadcom_slot-13_1.1": "PCI13-P1",
-            "Broadcom_slot-13_2.1": "PCI13-P2",
-            "Broadcom_slot-15_1.1": "PCI15-P1",
-            "Broadcom_slot-15_2.1": "PCI15-P2",
-            "Broadcom_slot-18_1.1": "PCI18-P1",
-            "Broadcom_slot-18_2.1": "PCI18-P2",
-            "NIC.FlexLOM.1.1_1": "L1",
-            "NIC.FlexLOM.1.1_2": "L2",
-            "NIC.FlexLOM.1.1_3": "L3",
-            "NIC.FlexLOM.1.1_4": "L4",
-            "NIC.Slot.1.1_1": "PCI1-P1",
-            "NIC.Slot.1.1_2": "PCI1-P2",
-            "NIC.Slot.2.1_1": "PCI2-P1",
-            "NIC.Slot.2.1_2": "PCI2-P2",
-            "NIC.Slot.3.1_1": "PCI3-P1",
-            "NIC.Slot.3.1_2": "PCI3-P2",
-            "NIC.Slot.4.1_1": "PCI4-P1",
-            "NIC.Slot.4.1_2": "PCI4-P2",
-            "NIC.Slot.5.1_1": "PCI5-P1",
-            "NIC.Slot.5.1_2": "PCI5-P2",
-            "NIC.Slot.6.1_1": "PCI6-P1",
-            "NIC.Slot.6.1_2": "PCI6-P2",
-            "AOC_1_1": "PCI1-P1",
-            "AOC_1_2": "PCI1-P2",
-            "AOC_2_1": "PCI2-P1",
-            "AOC_2_2": "PCI2-P2",
-            "AOC_3_1": "PCI3-P1",
-            "AOC_3_2": "PCI3-P2",
-            "AOC_4_1": "PCI4-P1",
-            "AOC_4_2": "PCI4-P2",
-            "AOC_5_1": "PCI5-P1",
-            "AOC_5_2": "PCI5-P2",
-            "OnBoard_1": "L1",
-            "OnBoard_2": "L2",
-            "OnBoard_3": "L3",
-            "OnBoard_4": "L4"
-        }
         self.server_rib_matrix = ["XCC", "iDRAC", "iLO", "remoteboard"]
         self.netbox_network_interface_mapping = ["NIC1-port1", "NIC1-port2", "NIC2-port1", "NIC2-port2", "NIC3-port1", "NIC3-port2", "NIC4-port1", "NIC4-port2"]
         self.netbox_network_interface_description_mapping = {
@@ -517,8 +374,52 @@ class InventoryContext:
         return my_json[(self.remoteboard_uri_key_mapping.get(server_manufactorer).get("mac_key_name"))]
 
 
-    def nic_port_mapping(self, port_description):
-        return self.nic_port_mapping_matrix.get(port_description, "Error, mapping failed")
+    def nic_port_mapping(self, port_description: str) -> str:
+        """
+        Dynamically parse NIC port descriptions into standardized format.
+        """
+        # Pattern 1: "Integrated/Embedded NIC 1 Port X Partition 1" → "LX"
+        match = re.match(r"(?:Integrated|Embedded) NIC 1 Port (\d+) Partition 1", port_description)
+        if match:
+            return f"L{match.group(1)}"
+
+        # Pattern 2: "NIC in Slot X Port Y Partition 1" → "PCIX-PY"
+        match = re.match(r"NIC in Slot (\d+) Port (\d+) Partition 1", port_description)
+        if match:
+            return f"PCI{match.group(1)}-P{match.group(2)}"
+
+        # Pattern 3: "Intel_slot-X_Y.1" → "LY"
+        match = re.match(r"Intel_slot-\d+_(\d+)\.1", port_description)
+        if match:
+            return f"L{match.group(1)}"
+
+        # Pattern 4: "Mellanox_slot-X_Y.1" or "Broadcom_slot-X_Y.1" → "PCIX-PY"
+        match = re.match(r"(?:Mellanox|Broadcom)_slot-(\d+)_(\d+)\.1", port_description)
+        if match:
+            return f"PCI{match.group(1)}-P{match.group(2)}"
+
+        # Pattern 5: "NIC.FlexLOM.1.1_X" → "LX"
+        match = re.match(r"NIC\.FlexLOM\.1\.1_(\d+)", port_description)
+        if match:
+            return f"L{match.group(1)}"
+
+        # Pattern 6: "NIC.Slot.X.1_Y" → "PCIX-PY"
+        match = re.match(r"NIC\.Slot\.(\d+)\.1_(\d+)", port_description)
+        if match:
+            return f"PCI{match.group(1)}-P{match.group(2)}"
+
+        # Pattern 7: "AOC_X_Y" → "PCIX-PY"
+        match = re.match(r"AOC_(\d+)_(\d+)", port_description)
+        if match:
+            return f"PCI{match.group(1)}-P{match.group(2)}"
+
+        # Pattern 8: "OnBoard_X" → "LX"
+        match = re.match(r"OnBoard_(\d+)", port_description)
+        if match:
+            return f"L{match.group(1)}"
+
+        # Fallback: return error message
+        return f"Error, mapping failed for: {port_description}"
 
 
     def netbox_nic_description_mapping(self, my_input):
