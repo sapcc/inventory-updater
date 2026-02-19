@@ -9,6 +9,7 @@ import sys
 import time
 import traceback
 import falcon
+import requests
 
 from redfish_collector import RedfishIventoryCollector, CollectorException
 from netbox import NetboxInventoryUpdater
@@ -161,15 +162,24 @@ class InventoryCollector:
         except CollectorException as err:
             logging.error("  Target %s: Error collecting inventory: %s", bmc, err)
 
+        except (requests.exceptions.RequestException, ConnectionError, TimeoutError) as err:
+            logging.error("  Target %s: Network error during inventory collection: %s", bmc, type(err).__name__)
+            raise HandlerException(f"Network error for {bmc}: {type(err).__name__}") from err
+
+        except (KeyError, ValueError, TypeError) as err:
+            logging.error("  Target %s: Data parsing error during inventory collection: %s", bmc, err)
+            raise HandlerException(f"Data parsing error for {bmc}: {err}") from err
+
         except Exception as err:
+            logging.error("  Target %s: Unexpected error during inventory collection: %s", bmc, type(err).__name__)
             raise HandlerException(traceback.format_exc()) from err
 
         finally:
             try:
                 if server_collector:
                     server_collector.close_session()
-            except Exception as err:
-                raise HandlerException(err) from err
+            except (requests.exceptions.RequestException, ConnectionError) as err:
+                logging.warning("  Target %s: Error closing session: %s", bmc, type(err).__name__)
 
         if inventory:
             logging.info("==> Server %s: Updating Netbox inventory", server)

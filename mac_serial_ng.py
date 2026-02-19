@@ -559,9 +559,13 @@ class InventoryContext:
         logging.info("  Writing serial number to Netbox %s", url)
         try:
             result = requests.patch(url, json=payload, headers=head)
+            result.raise_for_status()
             result.close()
-        except Exception as e:
-            logging.error("  Error writing %s %s: %s", url, payload, e)
+        except requests.exceptions.HTTPError as e:
+            logging.error("  HTTP error writing serial number to %s (status %s): %s",
+                         url, e.response.status_code if e.response else 'unknown', type(e).__name__)
+        except requests.exceptions.RequestException as e:
+            logging.error("  Network error writing serial number to %s: %s", url, type(e).__name__)
         return
 
 
@@ -590,9 +594,13 @@ class InventoryContext:
         logging.info("  Writing MAC to Netbox %s", url)
         try:
             result = requests.patch(url, json=payload, headers=head)
+            result.raise_for_status()
             result.close()
-        except Exception as e:
-            logging.error("  Error writing MAC %s - %s: %s", url, payload, e)
+        except requests.exceptions.HTTPError as e:
+            logging.error("  HTTP error writing MAC to %s (status %s): %s",
+                         url, e.response.status_code if e.response else 'unknown', type(e).__name__)
+        except requests.exceptions.RequestException as e:
+            logging.error("  Network error writing MAC to %s: %s", url, type(e).__name__)
         return
 
 
@@ -629,8 +637,13 @@ class InventoryContext:
                 # Cleanup session
                 self.session_delete_x_auth_session(board_address, session_x_auth_token, session_uri, session_id)
 
+            except (requests.exceptions.RequestException, ConnectionError) as e:
+                logging.error("  Network error processing server %s: %s", server, type(e).__name__)
+            except (KeyError, ValueError, TypeError) as e:
+                logging.error("  Data error processing server %s: %s", server, e)
             except Exception as e:
-                logging.error("  Error processing server %s: %s", server, e)
+                logging.error("  Unexpected error processing server %s: %s - %s",
+                             server, type(e).__name__, str(e))
 
 
     def runSerialNumberScript(self, server):
@@ -746,8 +759,13 @@ class InventoryContext:
                     else:
                         self.netbox_write_interface_mac_and_mtu(interface_id, payload_data, mac_address, 9000)
 
+            except (requests.exceptions.RequestException, ConnectionError) as e:
+                logging.error("  Network error processing server %s NIC interfaces: %s", item, type(e).__name__)
+            except (KeyError, ValueError, TypeError, IndexError) as e:
+                logging.error("  Data error processing server %s NIC interfaces: %s", item, e)
             except Exception as e:
-                logging.error("  Error processing server %s: %s", item, e)
+                logging.error("  Unexpected error processing server %s: %s - %s",
+                             item, type(e).__name__, str(e))
             finally:
                 self.netbox_nic_interfaces_dict.clear()
         return
