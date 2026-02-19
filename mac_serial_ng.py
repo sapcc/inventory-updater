@@ -94,6 +94,24 @@ class InventoryContext:
         value = os.getenv(key.upper(), str(self.configuration.get(key.lower(), default)))
         return value.lower() == "true"
 
+    def _redfish_url(self, path: str, system_id: str = "1") -> str:
+        """
+        Build Redfish URL paths with common base patterns.
+
+        Args:
+            path: The endpoint type ('systems', 'chassis', 'managers')
+            system_id: The system/chassis/manager ID (default: "1")
+
+        Returns:
+            Full Redfish path
+        """
+        base_paths = {
+            'systems': f"/redfish/v1/Systems/{system_id}",
+            'chassis': f"/redfish/v1/Chassis/{system_id}",
+            'managers': f"/redfish/v1/Managers/{system_id}",
+        }
+        return base_paths.get(path.lower(), f"/redfish/v1/{path}")
+
     def _redfish_get(self, bmc_address: str, path: str, session_token: str) -> Dict[str, Any]:
         """Single method for all Redfish GET calls"""
         url = f"https://{bmc_address}{path}"
@@ -168,7 +186,8 @@ class InventoryContext:
 
 
     def server_redfish_get_system_info(self, server_name_bmc, server_name_short, session_x_auth_token, hw_vendor):
-        myjsondata = self._redfish_get(server_name_bmc, f"/redfish/v1/Systems/{self.redfish_get_info_mapping.get(hw_vendor)}", session_x_auth_token)
+        system_id = self.redfish_get_info_mapping.get(hw_vendor)
+        myjsondata = self._redfish_get(server_name_bmc, f"{self._redfish_url('systems', system_id)}", session_x_auth_token)
         memory_gib = myjsondata["MemorySummary"]["TotalSystemMemoryGiB"]
         memory_gb = round(memory_gib * 1.073741824)    # 1 GiB = 1.073741824 GB
         vendor = myjsondata["Manufacturer"]
@@ -180,7 +199,7 @@ class InventoryContext:
 
     def lenovo_redfish_get_network_interfaces(self, bmc_address, server_name_short, session_x_auth_token):
         nic_list = []
-        myjson_members_data = self._redfish_get(bmc_address, "/redfish/v1/Chassis/1/NetworkAdapters/", session_x_auth_token)["Members"]
+        myjson_members_data = self._redfish_get(bmc_address, f"{self._redfish_url('chassis')}/NetworkAdapters/", session_x_auth_token)["Members"]
 
         for nic_entry in myjson_members_data:
             nicdata = self._redfish_get(bmc_address, nic_entry['@odata.id'], session_x_auth_token)
@@ -221,7 +240,7 @@ class InventoryContext:
 
     def hpe_redfish_get_network_interfaces(self,bmc_address, server_name_short, session_x_auth_token):
         nic_list = list()
-        myjsondata = self._redfish_get(bmc_address, "/redfish/v1/Systems/1/BaseNetworkAdapters/", session_x_auth_token)
+        myjsondata = self._redfish_get(bmc_address, f"{self._redfish_url('systems')}/BaseNetworkAdapters/", session_x_auth_token)
         adapters_data = myjsondata["Members"]
         for adapter_entry in adapters_data:
             adapter_data = self._redfish_get(bmc_address, adapter_entry['@odata.id'], session_x_auth_token)
@@ -252,7 +271,7 @@ class InventoryContext:
 
     def hpe_redfish_get_network_interfaces_ilo6(self, bmc_address, server_name_short, session_x_auth_token):
         nic_list = list()
-        myjsondata = self._redfish_get(bmc_address, "/redfish/v1/Systems/1/PCIDevices/", session_x_auth_token)
+        myjsondata = self._redfish_get(bmc_address, f"{self._redfish_url('systems')}/PCIDevices/", session_x_auth_token)
         myjson_members_data = myjsondata["Members"]
         for item in range(0, len(myjson_members_data)):
             nic = myjsondata["Members"][item]["@odata.id"]
@@ -270,7 +289,7 @@ class InventoryContext:
                     nic_device_endpoint_url = "/Ports/"
                     custom_field = "NIC.FlexLOM.1.1" + "_"
 
-                myjsondata2 = self._redfish_get(bmc_address, f"/redfish/v1/Chassis/1/NetworkAdapters/{nic_device_resource_id}{nic_device_endpoint_url}", session_x_auth_token)
+                myjsondata2 = self._redfish_get(bmc_address, f"{self._redfish_url('chassis')}/NetworkAdapters/{nic_device_resource_id}{nic_device_endpoint_url}", session_x_auth_token)
                 myjson_members_data2 = myjsondata2["Members"]
                 for nic_entry in myjson_members_data2:
                     nic2 = nic_entry["@odata.id"]
@@ -296,13 +315,13 @@ class InventoryContext:
 
 
     def hpe_get_ilo_version(self, bmc_address, session_x_auth_token):
-        myjsondata = self._redfish_get(bmc_address, "/redfish/v1/Managers/1/", session_x_auth_token)
+        myjsondata = self._redfish_get(bmc_address, f"{self._redfish_url('managers')}/", session_x_auth_token)
         return myjsondata["Model"]
 
 
     def supermicro_redfish_get_network_interfaces(self, bmc_address, server_name_short, session_x_auth_token):
         nic_list = list()
-        myjsondata = self._redfish_get(bmc_address, "/redfish/v1/Chassis/1/NetworkAdapters/", session_x_auth_token)
+        myjsondata = self._redfish_get(bmc_address, f"{self._redfish_url('chassis')}/NetworkAdapters/", session_x_auth_token)
         myjson_members_data = myjsondata["Members"]
         for adapter in myjson_members_data:
             nicdata = self._redfish_get(bmc_address, adapter['@odata.id'], session_x_auth_token)
@@ -319,7 +338,7 @@ class InventoryContext:
                             nic_list.append(nic2data["Ethernet"]["MACAddress"])
                             custom_field = ""
         self.netbox_server_dict[server_name_short].update({"nics": nic_list})
-        myjsondata = self._redfish_get(bmc_address, "/redfish/v1/Systems/1/EthernetInterfaces", session_x_auth_token)
+        myjsondata = self._redfish_get(bmc_address, f"{self._redfish_url('systems')}/EthernetInterfaces", session_x_auth_token)
         myjson_members_data = myjsondata["Members"]
         for interface in myjson_members_data:
             nicdata = self._redfish_get(bmc_address, interface['@odata.id'], session_x_auth_token)
