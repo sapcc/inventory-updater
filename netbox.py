@@ -60,10 +60,6 @@ class NetboxConnection:
             response.raise_for_status()
 
         except requests.exceptions.HTTPError as err:
-            logging.error ("  Netbox Error: %s", err)
-            if response:
-                logging.error ("  Response Status: %s", err)
-
             raise NetboxConnectionException(
                 f"Netbox HTTP Error: {err}"
             ) from err
