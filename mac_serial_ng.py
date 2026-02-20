@@ -112,6 +112,15 @@ class InventoryContext:
         }
         return base_paths.get(path.lower(), f"/redfish/v1/{path}")
 
+    def _add_nic_to_list(self, nic_list: list, custom_field: str, mac_address: str) -> None:
+        """
+        Add a NIC entry to the list with proper formatting.
+        Each NIC requires 3 elements: field name, port mapping, MAC address.
+        """
+        nic_list.append(custom_field)
+        nic_list.append(self.nic_port_mapping(custom_field))
+        nic_list.append(mac_address)
+
     def _redfish_get(self, bmc_address: str, path: str, session_token: str) -> Dict[str, Any]:
         """Single method for all Redfish GET calls"""
         url = f"https://{bmc_address}{path}"
@@ -178,9 +187,7 @@ class InventoryContext:
             nic = entry["@odata.id"]
             nicdata = self._redfish_get(bmc_address, nic, session_x_auth_token)
             if nicdata.get("MACAddress"):
-                nic_list.append(nicdata.get("Description"))
-                nic_list.append(self.nic_port_mapping(nicdata.get("Description")))
-                nic_list.append(nicdata["MACAddress"])
+                self._add_nic_to_list(nic_list, nicdata.get("Description"), nicdata["MACAddress"])
 
         self.netbox_server_dict[server_name_short].update({"nics": nic_list})
 
@@ -231,9 +238,7 @@ class InventoryContext:
                     custom_field = f"{prefix}_{nicdata['Id']}_{nic2data['Id']}"
                     mac = nic2data.get("Ethernet", {}).get("MACAddress")
                     if mac:
-                        nic_list.append(custom_field)
-                        nic_list.append(self.nic_port_mapping(custom_field))
-                        nic_list.append(mac)
+                        self._add_nic_to_list(nic_list, custom_field, mac)
 
         self.netbox_server_dict[server_name_short].update({"nics": nic_list})
 
@@ -260,9 +265,7 @@ class InventoryContext:
 
                 for mac_item in self.mac_list:
                     suffix = str(self.mac_list.index(mac_item) + 1)
-                    nic_list.append(custom_field + suffix)
-                    nic_list.append(self.nic_port_mapping(custom_field + suffix))
-                    nic_list.append(mac_item)
+                    self._add_nic_to_list(nic_list, custom_field + suffix, mac_item)
 
                 self.mac_list.clear()
 
@@ -304,9 +307,7 @@ class InventoryContext:
                 self.mac_list.sort()
                 for mac_item in self.mac_list:
                     suffix = str((self.mac_list.index(mac_item) + 1))
-                    nic_list.append(custom_field + suffix)
-                    nic_list.append(self.nic_port_mapping(custom_field + suffix))
-                    nic_list.append(mac_item)
+                    self._add_nic_to_list(nic_list, custom_field + suffix, mac_item)
 
 
                 custom_field = ""
@@ -333,9 +334,7 @@ class InventoryContext:
                         nic2data = self._redfish_get(bmc_address, function['@odata.id'], session_x_auth_token)
                         custom_field = f"AOC_{controllers[0]['Location']['PartLocation']['LocationOrdinalValue']}_{nic2data['Id']}"
                         if nic2data["Ethernet"]["MACAddress"] != "":
-                            nic_list.append(custom_field)
-                            nic_list.append(self.nic_port_mapping(custom_field))
-                            nic_list.append(nic2data["Ethernet"]["MACAddress"])
+                            self._add_nic_to_list(nic_list, custom_field, nic2data["Ethernet"]["MACAddress"])
                             custom_field = ""
         self.netbox_server_dict[server_name_short].update({"nics": nic_list})
         myjsondata = self._redfish_get(bmc_address, f"{self._redfish_url('systems')}/EthernetInterfaces", session_x_auth_token)
@@ -345,9 +344,7 @@ class InventoryContext:
             if "OnBoard" in nicdata["Name"]:
                 custom_field = f"OnBoard_{nicdata['Id']}"
                 if nicdata["MACAddress"] != "":
-                    nic_list.append(custom_field)
-                    nic_list.append(self.nic_port_mapping(custom_field))
-                    nic_list.append(nicdata["MACAddress"])
+                    self._add_nic_to_list(nic_list, custom_field, nicdata["MACAddress"])
                     custom_field = ""
         self.netbox_server_dict[server_name_short].update({"nics": nic_list})
 
