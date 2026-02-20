@@ -16,7 +16,6 @@ from wsgiref.simple_server import make_server, WSGIServer, WSGIRequestHandler
 from socketserver import ThreadingMixIn
 import yaml
 import falcon
-from netbox import NetboxInventoryUpdater
 
 from handler import WelcomePage, InventoryCollector, HandlerException
 from netbox import NetboxConnection, NetboxConnectionException
