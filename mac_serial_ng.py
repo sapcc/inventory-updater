@@ -75,8 +75,8 @@ class InventoryContext:
         self.netbox_server_dict = {}
         self.netbox_nic_interfaces_dict = {}
         self.nic_interfaces_summary_list = []
-        self.my_new_template_nic_list = []
-        self.my_new_template_nic_list_sorted = []
+        self.template_nic_list = []
+        self.template_nic_list_sorted = []
         self.mac_list = []
         self.vendor_list = ["Dell", "Lenovo", "HPE", "Supermicro"]
         self.server_manufacturer = ""
@@ -168,9 +168,9 @@ class InventoryContext:
             logging.error("Not able to create token")
             sys.exit(1)
         data = response.json()
-        my_session_id = data["Id"]
-        my_session_token = response.headers.get("x-auth-token")
-        return my_session_id, my_session_token
+        session_id = data["Id"]
+        session_token = response.headers.get("x-auth-token")
+        return session_id, session_token
 
 
     def session_delete_x_auth_session(self, server_rib: str, session_x_auth_token: str, session_uri: str, session_id: str):
@@ -180,10 +180,10 @@ class InventoryContext:
 
     def dell_redfish_get_network_interfaces(self, bmc_address, server_name_short, session_x_auth_token):
         nic_list = list()
-        myjsondata = self._redfish_get(bmc_address, "/redfish/v1/Systems/System.Embedded.1/EthernetInterfaces/", session_x_auth_token)
-        myjson_members_data = myjsondata["Members"]
+        interfaces_response = self._redfish_get(bmc_address, "/redfish/v1/Systems/System.Embedded.1/EthernetInterfaces/", session_x_auth_token)
+        interface_members = interfaces_response["Members"]
 
-        for entry in myjson_members_data:
+        for entry in interface_members:
             nic = entry["@odata.id"]
             nicdata = self._redfish_get(bmc_address, nic, session_x_auth_token)
             if nicdata.get("MACAddress"):
@@ -194,21 +194,21 @@ class InventoryContext:
 
     def server_redfish_get_system_info(self, server_name_bmc, server_name_short, session_x_auth_token, hw_vendor):
         system_id = self.redfish_get_info_mapping.get(hw_vendor)
-        myjsondata = self._redfish_get(server_name_bmc, f"{self._redfish_url('systems', system_id)}", session_x_auth_token)
-        memory_gib = myjsondata["MemorySummary"]["TotalSystemMemoryGiB"]
+        system_response = self._redfish_get(server_name_bmc, f"{self._redfish_url('systems', system_id)}", session_x_auth_token)
+        memory_gib = system_response["MemorySummary"]["TotalSystemMemoryGiB"]
         memory_gb = round(memory_gib * 1.073741824)    # 1 GiB = 1.073741824 GB
-        vendor = myjsondata["Manufacturer"]
-        model = myjsondata["Model"]
-        serial = myjsondata["SKU"]
-        health = myjsondata["Status"]["Health"]
+        vendor = system_response["Manufacturer"]
+        model = system_response["Model"]
+        serial = system_response["SKU"]
+        health = system_response["Status"]["Health"]
         self.netbox_server_dict[server_name_short].update({"manufacturer": vendor, "model": model, "memory_gb": memory_gb, "serial_redfish": serial, "system_health": health})
 
 
     def lenovo_redfish_get_network_interfaces(self, bmc_address, server_name_short, session_x_auth_token):
         nic_list = []
-        myjson_members_data = self._redfish_get(bmc_address, f"{self._redfish_url('chassis')}/NetworkAdapters/", session_x_auth_token)["Members"]
+        adapters_members = self._redfish_get(bmc_address, f"{self._redfish_url('chassis')}/NetworkAdapters/", session_x_auth_token)["Members"]
 
-        for nic_entry in myjson_members_data:
+        for nic_entry in adapters_members:
             nicdata = self._redfish_get(bmc_address, nic_entry['@odata.id'], session_x_auth_token)
 
             manufacturer = nicdata.get("Manufacturer", "")
@@ -245,8 +245,8 @@ class InventoryContext:
 
     def hpe_redfish_get_network_interfaces(self,bmc_address, server_name_short, session_x_auth_token):
         nic_list = list()
-        myjsondata = self._redfish_get(bmc_address, f"{self._redfish_url('systems')}/BaseNetworkAdapters/", session_x_auth_token)
-        adapters_data = myjsondata["Members"]
+        adapters_response = self._redfish_get(bmc_address, f"{self._redfish_url('systems')}/BaseNetworkAdapters/", session_x_auth_token)
+        adapters_data = adapters_response["Members"]
         for adapter_entry in adapters_data:
             adapter_data = self._redfish_get(bmc_address, adapter_entry['@odata.id'], session_x_auth_token)
 
@@ -274,10 +274,10 @@ class InventoryContext:
 
     def hpe_redfish_get_network_interfaces_ilo6(self, bmc_address, server_name_short, session_x_auth_token):
         nic_list = list()
-        myjsondata = self._redfish_get(bmc_address, f"{self._redfish_url('systems')}/PCIDevices/", session_x_auth_token)
-        myjson_members_data = myjsondata["Members"]
-        for item in range(0, len(myjson_members_data)):
-            nic = myjsondata["Members"][item]["@odata.id"]
+        pci_devices_response = self._redfish_get(bmc_address, f"{self._redfish_url('systems')}/PCIDevices/", session_x_auth_token)
+        pci_devices_members = pci_devices_response["Members"]
+        for device_index in range(0, len(pci_devices_members)):
+            nic = pci_devices_response["Members"][device_index]["@odata.id"]
             nicdata = self._redfish_get(bmc_address, nic, session_x_auth_token)
             if "NIC" in nicdata["DeviceType"] or "LOM" in nicdata["DeviceType"]:
                 if "Connect" in nicdata["Name"] or "Mellanox" in nicdata["Name"] or "Broadcom" in nicdata["Name"]:
@@ -292,9 +292,9 @@ class InventoryContext:
                     nic_device_endpoint_url = "/Ports/"
                     custom_field = "NIC.FlexLOM.1.1" + "_"
 
-                myjsondata2 = self._redfish_get(bmc_address, f"{self._redfish_url('chassis')}/NetworkAdapters/{nic_device_resource_id}{nic_device_endpoint_url}", session_x_auth_token)
-                myjson_members_data2 = myjsondata2["Members"]
-                for nic_entry in myjson_members_data2:
+                ports_response = self._redfish_get(bmc_address, f"{self._redfish_url('chassis')}/NetworkAdapters/{nic_device_resource_id}{nic_device_endpoint_url}", session_x_auth_token)
+                ports_members = ports_response["Members"]
+                for nic_entry in ports_members:
                     nic2 = nic_entry["@odata.id"]
                     nic2data = self._redfish_get(bmc_address, nic2, session_x_auth_token)
                     if "Network" in nic_device_endpoint_url:
@@ -316,15 +316,15 @@ class InventoryContext:
 
 
     def hpe_get_ilo_version(self, bmc_address, session_x_auth_token):
-        myjsondata = self._redfish_get(bmc_address, f"{self._redfish_url('managers')}/", session_x_auth_token)
-        return myjsondata["Model"]
+        manager_response = self._redfish_get(bmc_address, f"{self._redfish_url('managers')}/", session_x_auth_token)
+        return manager_response["Model"]
 
 
     def supermicro_redfish_get_network_interfaces(self, bmc_address, server_name_short, session_x_auth_token):
         nic_list = list()
-        myjsondata = self._redfish_get(bmc_address, f"{self._redfish_url('chassis')}/NetworkAdapters/", session_x_auth_token)
-        myjson_members_data = myjsondata["Members"]
-        for adapter in myjson_members_data:
+        adapters_response = self._redfish_get(bmc_address, f"{self._redfish_url('chassis')}/NetworkAdapters/", session_x_auth_token)
+        adapters_members = adapters_response["Members"]
+        for adapter in adapters_members:
             nicdata = self._redfish_get(bmc_address, adapter['@odata.id'], session_x_auth_token)
             if "Supermicro" in nicdata["Manufacturer"]:
                 controllers = nicdata["Controllers"]
@@ -337,9 +337,9 @@ class InventoryContext:
                             self._add_nic_to_list(nic_list, custom_field, nic2data["Ethernet"]["MACAddress"])
                             custom_field = ""
         self.netbox_server_dict[server_name_short].update({"nics": nic_list})
-        myjsondata = self._redfish_get(bmc_address, f"{self._redfish_url('systems')}/EthernetInterfaces", session_x_auth_token)
-        myjson_members_data = myjsondata["Members"]
-        for interface in myjson_members_data:
+        ethernet_interfaces_response = self._redfish_get(bmc_address, f"{self._redfish_url('systems')}/EthernetInterfaces", session_x_auth_token)
+        ethernet_interfaces_members = ethernet_interfaces_response["Members"]
+        for interface in ethernet_interfaces_members:
             nicdata = self._redfish_get(bmc_address, interface['@odata.id'], session_x_auth_token)
             if "OnBoard" in nicdata["Name"]:
                 custom_field = f"OnBoard_{nicdata['Id']}"
@@ -352,18 +352,18 @@ class InventoryContext:
     def netbox_get_info(self, server_name):
         url = f"{self.url_netbox_device_q}{server_name}"
         with requests.Session() as session:
-            myjson = session.get(url).json()
-            myworkingdata = myjson["results"]
-            for entry in myworkingdata:
+            device_response = session.get(url).json()
+            device_results = device_response["results"]
+            for entry in device_results:
                 if entry["device_type"]["manufacturer"]["name"] in self.vendor_list:
                     self.netbox_server_dict[entry["name"]] = {"device_id": entry["id"], "servername": entry["name"], "serial": entry["serial"]}
                     self.server_manufacturer = entry["device_type"]["manufacturer"]["name"]
 
             for device_name_entry in self.netbox_server_dict:
                 url = f"{self.url_netbox_ip_device}{device_name_entry}"
-                myjson = session.get(url).json()
-                myworkingdata = myjson["results"]
-                for ip_entry in myworkingdata:
+                ip_response = session.get(url).json()
+                ip_results = ip_response["results"]
+                for ip_entry in ip_results:
                     assigned_obj = ip_entry["assigned_object"]
                     name = assigned_obj["name"]
                     if name in self.server_rib_matrix:
@@ -386,8 +386,8 @@ class InventoryContext:
     def get_remoteboard_mac(self, server_manufactorer, bmc_address):
         url = f"https://{bmc_address}{self.remoteboard_uri_key_mapping.get(server_manufactorer).get('uri')}"
         with requests.Session() as session:
-            my_json = session.get(url, auth=(self.args_user_name, self.args_password), verify=False).json()
-        return my_json[(self.remoteboard_uri_key_mapping.get(server_manufactorer).get("mac_key_name"))]
+            remoteboard_response = session.get(url, auth=(self.args_user_name, self.args_password), verify=False).json()
+        return remoteboard_response[(self.remoteboard_uri_key_mapping.get(server_manufactorer).get("mac_key_name"))]
 
 
     def nic_port_mapping(self, port_description: str) -> str:
@@ -438,12 +438,12 @@ class InventoryContext:
         return f"Error, mapping failed for: {port_description}"
 
 
-    def netbox_nic_description_mapping(self, my_input):
-        return self.netbox_network_interface_description_mapping.get(my_input, "Error, Netbox NIC description mapping")
+    def netbox_nic_description_mapping(self, nic_description):
+        return self.netbox_network_interface_description_mapping.get(nic_description, "Error, Netbox NIC description mapping")
 
 
-    def netbox_nic_description_mapping_short(self, my_input):
-        return self.netbox_network_interface_description_mapping_short.get(my_input, "Error, Netbox NIC description mapping")
+    def netbox_nic_description_mapping_short(self, nic_description):
+        return self.netbox_network_interface_description_mapping_short.get(nic_description, "Error, Netbox NIC description mapping")
 
 
     def netbox_write_serial_number(self, device_id, serial_number):
@@ -518,7 +518,7 @@ class InventoryContext:
 
     def runSerialNumberScript(self, server):
         logging.info("==> Server %s: Getting Serial# and MAC-Addresses", server)
-        
+
         # cut off the FQDN from the server variable
         short_server_name = server.split('.')[0]
 
@@ -528,7 +528,7 @@ class InventoryContext:
         for item in self.netbox_server_dict:
             isNICNot4Port = False
             try:
-                self.my_new_template_nic_list.clear()
+                self.template_nic_list.clear()
                 device_id = None
                 serial_number = None
                 mac_address = None
@@ -550,55 +550,55 @@ class InventoryContext:
                 else:
                     logging.info("  %s: Netbox serial number matching", self.netbox_server_dict[item]["servername"])
 
-                mylist = self.netbox_server_dict[item]["nics"]
+                nics_list = self.netbox_server_dict[item]["nics"]
                 self.netbox_get_interface_mac(self.netbox_server_dict[item]["device_id"])
-                for inner_loop in self.netbox_nic_interfaces_dict[item]:
-                    if "NIC" in self.netbox_nic_interfaces_dict[item][inner_loop]["name"]:
-                        for myitem in mylist:
-                            if "PCI" in myitem:
-                                self.my_new_template_nic_list.append(myitem)
-                        my_new_template_nic_list_sorted = natsorted(self.my_new_template_nic_list)
-                        my_new_template_nic_list_counter = 0
+                for interface_id in self.netbox_nic_interfaces_dict[item]:
+                    if "NIC" in self.netbox_nic_interfaces_dict[item][interface_id]["name"]:
+                        for nic_item in nics_list:
+                            if "PCI" in nic_item:
+                                self.template_nic_list.append(nic_item)
+                        template_nic_list_sorted = natsorted(self.template_nic_list)
+                        template_nic_list_counter = 0
 
-                        if len(my_new_template_nic_list_sorted) < 4:            # > 4 means a list with all 4 ports, in the new case we only have 2 entries in the list
-                            my_new_template_nic_list_counter_increase = 1       # add 2 otherwise the list will map wrong port, valid for 2 entries
+                        if len(template_nic_list_sorted) < 4:            # > 4 means a list with all 4 ports, in the new case we only have 2 entries in the list
+                            template_nic_list_counter_increase = 1       # add 2 otherwise the list will map wrong port, valid for 2 entries
                             isNICNot4Port = True
                         else:
-                            my_new_template_nic_list_counter_increase = 1       # add 1 if all four ports exists, valid for 2 port nic's
+                            template_nic_list_counter_increase = 1       # add 1 if all four ports exists, valid for 2 port nic's
 
-                        for nic_item in my_new_template_nic_list_sorted:
-                            my_new_template_nic_index = (mylist.index(nic_item))
-                            mylist[my_new_template_nic_index] = self.netbox_network_interface_mapping[my_new_template_nic_list_counter]
-                            my_new_template_nic_list_counter += my_new_template_nic_list_counter_increase
+                        for nic_item in template_nic_list_sorted:
+                            template_nic_index = (nics_list.index(nic_item))
+                            nics_list[template_nic_index] = self.netbox_network_interface_mapping[template_nic_list_counter]
+                            template_nic_list_counter += template_nic_list_counter_increase
                         break
 
-                mylist.append("remoteboard")
-                mylist.append(self.get_remoteboard_mac(self.server_manufacturer, self.netbox_server_dict[item]["remoteboard"]))
+                nics_list.append("remoteboard")
+                nics_list.append(self.get_remoteboard_mac(self.server_manufacturer, self.netbox_server_dict[item]["remoteboard"]))
 
-                for inner_dict_key in self.netbox_nic_interfaces_dict[item]:
+                for interface_dict_key in self.netbox_nic_interfaces_dict[item]:
 
-                    if self.netbox_nic_interfaces_dict[item][inner_dict_key]["name"] not in mylist:
+                    if self.netbox_nic_interfaces_dict[item][interface_dict_key]["name"] not in nics_list:
                         break
 
-                    mylist_index = (mylist.index(self.netbox_nic_interfaces_dict[item][inner_dict_key]["name"]))
-                    mac_address = str.upper(mylist[mylist_index + 1])
+                    nics_list_index = (nics_list.index(self.netbox_nic_interfaces_dict[item][interface_dict_key]["name"]))
+                    mac_address = str.upper(nics_list[nics_list_index + 1])
 
-                    if "NIC" in self.netbox_nic_interfaces_dict[item][inner_dict_key]["description"]:
+                    if "NIC" in self.netbox_nic_interfaces_dict[item][interface_dict_key]["description"]:
 
-                        if len(my_new_template_nic_list_sorted) < 4: # same convention 2 / 4 Ports, needs to be mapped different. WTF
-                            self.netbox_nic_interfaces_dict[item][inner_dict_key]["description"] = my_new_template_nic_list_sorted[
-                                self.netbox_nic_description_mapping_short(self.netbox_nic_interfaces_dict[item][inner_dict_key]["description"])]
+                        if len(template_nic_list_sorted) < 4: # same convention 2 / 4 Ports, needs to be mapped different. WTF
+                            self.netbox_nic_interfaces_dict[item][interface_dict_key]["description"] = template_nic_list_sorted[
+                                self.netbox_nic_description_mapping_short(self.netbox_nic_interfaces_dict[item][interface_dict_key]["description"])]
                             isNICNot4Port = True
                         else:
-                            self.netbox_nic_interfaces_dict[item][inner_dict_key]["description"] = my_new_template_nic_list_sorted[
-                                self.netbox_nic_description_mapping(self.netbox_nic_interfaces_dict[item][inner_dict_key]["description"])]
+                            self.netbox_nic_interfaces_dict[item][interface_dict_key]["description"] = template_nic_list_sorted[
+                                self.netbox_nic_description_mapping(self.netbox_nic_interfaces_dict[item][interface_dict_key]["description"])]
 
                     if not self.args_write_flag:
                         logging.info("  Dry-Run mode - No changes will be made to Netbox")
                         continue
 
-                    payload_data = self.netbox_nic_interfaces_dict[item][inner_dict_key]
-                    interface_id = inner_dict_key
+                    payload_data = self.netbox_nic_interfaces_dict[item][interface_dict_key]
+                    interface_id = interface_dict_key
                     if payload_data["mac_address"] != mac_address:
                         logging.warning("  Netbox MAC-Address mismatch for server=%s interface=%s", self.netbox_server_dict[item]['servername'], payload_data['name'])
                         if payload_data["mac_address"] is None:
