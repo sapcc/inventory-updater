@@ -187,7 +187,7 @@ class InventoryCollector:
         try:
             server_collector = RedfishIventoryCollector(
                 timeout     = int(os.getenv('CONNECTION_TIMEOUT',
-                                            self.config['connection_timeout'])),
+                                            self.config.get('connection_timeout', 30))),
                 target      = bmc,
                 usr         = self.usr,
                 pwd         = self.pwd

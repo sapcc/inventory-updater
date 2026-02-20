@@ -18,17 +18,17 @@ class NetboxConnection:
     Class for Netbox API connection
     """
     def __init__(self, config):
-        self.region = os.getenv("REGION", config['region'])
-        self.netbox_query = os.getenv("NETBOX_QUERY", config['netbox']['query'])
+        self.region = os.getenv("REGION", config.get('region'))
+        self.netbox_query = os.getenv("NETBOX_QUERY", config.get('netbox', {}).get('query'))
 
-        self.netbox_url = os.getenv("NETBOX_URL", config['netbox']['url'])
+        self.netbox_url = os.getenv("NETBOX_URL", config.get('netbox', {}).get('url'))
         self.netbox_inventory_items_url = f"{self.netbox_url}/api/dcim/inventory-items/"
         self.netbox_devices_url = f"{self.netbox_url}/api/dcim/devices/"
         self.netbox_manufacturers_url = f"{self.netbox_url}/api/dcim/manufacturers/"
         self.netbox_regions_url = f"{self.netbox_url}/api/dcim/regions/"
 
         logging.info("Establishing connection to Netbox %s", self.netbox_url)
-        netbox_token = os.getenv("NETBOX_TOKEN", config['netbox']['token'])
+        netbox_token = os.getenv("NETBOX_TOKEN", config.get('netbox', {}).get('token'))
 
         if not netbox_token:
             logging.error("No NETBOX_TOKEN found in environment or config file")
