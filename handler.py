@@ -13,6 +13,7 @@ import requests
 
 from redfish_collector import RedfishIventoryCollector, CollectorException
 from netbox import NetboxInventoryUpdater
+from mac_serial import InventoryContext
 
 # pylint: disable=no-member
 
@@ -92,7 +93,7 @@ class InventoryCollector:
 
         start_time = time.time()
         try:
-            result = self.check_server_inventory(target)
+            result = self.process_single_server(target)
         except HandlerException as exc:
             logging.error("A Handler Exception occured: %s", traceback.format_exc())
             raise falcon.HTTPBadRequest("Bad Request", traceback.format_exc()) from exc
@@ -109,6 +110,45 @@ class InventoryCollector:
             resp.status = falcon.HTTP_500
             resp.content_type = 'text/html'
             resp.body = f"<p>Failed to pull the inventory of target {target}.</p>"
+
+    def process_single_server(self, server):
+        """
+        Process a single server: collect inventory and update MAC/serial numbers.
+        This method is used by both API mode and daemon/loop mode.
+        """
+        result = self.check_server_inventory(server)
+
+        if result == 0:
+            # Update MAC addresses and serial numbers using mac_serial
+            try:
+                # Determine netbox environment
+                netbox_url = self.config.get("netbox", {}).get("url", "")
+                netbox_environment = "staging" if "staging" in netbox_url else "global"
+
+                # Determine if this is a special netbox case (APOD servers)
+                special_netbox_case = "ap" in server.lower()
+                if not special_netbox_case:
+                    try:
+                        updater = NetboxInventoryUpdater(
+                            device_name=server.split('.')[0],
+                            netbox_connection=self.netbox_connection
+                        )
+                        device_info = updater.get_device()
+                        if device_info:
+                            tags = [tag["name"].lower() for tag in device_info.get("tags", [])]
+                            special_netbox_case = any("pod" in tag for tag in tags)
+                    except Exception as e:
+                        logging.warning("  Warning: Could not determine if device is APOD: %s", e)
+
+                # Create InventoryContext and run serial number script
+                inventory_context = InventoryContext(netbox_environment, self.config, special_netbox_case)
+                inventory_context.runSerialNumberScript(server)
+
+            except Exception as err:
+                logging.error("  Server %s: Error updating MAC addresses and serial numbers: %s", server, err)
+                # Don't fail the entire operation if MAC/serial update fails
+
+        return result
 
     def check_server_inventory(self, server):
         """

@@ -12,12 +12,11 @@ import warnings
 import time
 import gc       # Garbage collection module
 import sys
-from mac_serial_ng import InventoryContext
 from wsgiref.simple_server import make_server, WSGIServer, WSGIRequestHandler
 from socketserver import ThreadingMixIn
 import yaml
 import falcon
-from netbox import NetboxInventoryUpdater  
+from netbox import NetboxInventoryUpdater
 
 from handler import WelcomePage, InventoryCollector, HandlerException
 from netbox import NetboxConnection, NetboxConnectionException
@@ -190,24 +189,10 @@ def run_inventory_loop(config, connection):
             for server in serverlist:
                 try:
                     server = server.replace('\r','').replace('\n','')
-                    collector= InventoryCollector(config, connection)
-                    collector.check_server_inventory(server)
+                    collector = InventoryCollector(config, connection)
 
-                    #Currently if it is not a pod node, we set special_netbox_case to true
-                    special_netbox_case = "ap" in str(server).lower()
-                    if not special_netbox_case:
-                        try:
-                            device_info = NetboxInventoryUpdater(server, netbox_connection).get_device()
-                            if not device_info:
-                                raise NetboxConnectionException(f"Device {server} not found in Netbox")
-                            tags = [tag["name"].lower() for tag in device_info.get("tags", [])]
-                            special_netbox_case = any("pod" in tag for tag in tags)
-                        except NetboxConnectionException as e:
-                            print(f"Warning: Could not determine if device is APOD: {e}")
-
-                    inventory_obj = InventoryContext(NETBOX_ENVIRONMENT, configuration, special_netbox_case)
-
-                    inventory_obj.runSerialNumberScript(server)
+                    # Process single server (inventory + MAC/serial)
+                    collector.process_single_server(server)
 
                 except (HandlerException, NetboxConnectionException) as err:
                     logging.error(err)
