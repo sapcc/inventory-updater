@@ -4,3 +4,4 @@ __pycache__/*
 config/*
 logs/*
 servers*.txt
+request.http
