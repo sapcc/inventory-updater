@@ -124,35 +124,73 @@ class NetboxInventoryUpdater:
 
     def get_manufacturer_id(self, manufacturer):
         """
-        Get a manufacturer info from Netbox API
+        Get a manufacturer info from Netbox API.
+
+        Strips trademark/registered symbols with a regex, then tries progressively
+        broader queries against Netbox's substring-search 'q' parameter:
+
+          1. Full cleaned name  e.g. "Intel Corporation"  → no match
+          2. Each individual word in the cleaned name, longest first:
+               "Corporation" → no match, "Intel" → match ✓
+          3. CamelCase-split tokens of the original name, e.g. "Skhynix" →
+             ["Sk", "hynix"] — "hynix" matches "Hynix Semiconductor" ✓
         """
-        results = []
         url = self.netbox_connection.netbox_manufacturers_url
         if manufacturer:
-            query_manufacturer = manufacturer.split(" ")[0].replace("(R)","").lower()
-            params = {'q': query_manufacturer}
-            results = self.netbox_connection.send_request(
-                url=url, method='GET',
-                params=params
-            )['results']
+            # Strip trademark/registered symbols and normalise whitespace
+            clean = re.sub(r'[\(®™]\s*(?:R|TM)\s*\)', '', manufacturer)
+            clean = re.sub(r'[®™]', '', clean).strip()
 
-            if len(results) == 0:
-                logging.warning(
-                    "  Netbox %s: No manufacturer found with %s in the name! "
-                    "You should consider creating '%s'.",
-                    self.device_name,
-                    query_manufacturer,
-                    manufacturer
-                )
+            # Build candidate query list, deduplicating while preserving order.
+            # CamelCase split: "SKHynix" → ["SK", "Hynix"], "Skhynix" → ["Skhynix"]
+            camel_tokens = re.findall(r'[A-Z]{2,}(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]', manufacturer)
+            # For single-word tokens that may have a short prefix glued on (e.g. "Skhynix"),
+            # also try progressively shorter suffixes so "hynix" is eventually queried.
+            suffix_tokens = []
+            for word in clean.split():
+                if len(word) > 4:
+                    for i in range(1, min(4, len(word) - 3)):
+                        suffix_tokens.append(word[i:])
+            candidates = (
+                [clean]
+                + sorted(set(clean.split()), key=len, reverse=True)
+                + camel_tokens
+                + suffix_tokens
+            )
+            seen: set = set()
+            unique_candidates = []
+            for c in candidates:
+                cl = c.lower()
+                if cl and cl not in seen:
+                    seen.add(cl)
+                    unique_candidates.append(c)
 
-            elif len(results) > 1:
-                logging.error("  Netbox %s: More than one manufacturer found with name %s!",
-                    self.device_name,
-                    query_manufacturer
-                )
+            for query in unique_candidates:
+                results = self.netbox_connection.send_request(
+                    url=url, method='GET',
+                    params={'q': query}
+                )['results']
 
-            else:
-                return results[0]['id']
+                if len(results) == 1:
+                    logging.debug(
+                        "  Netbox %s: Matched manufacturer '%s' using query '%s'.",
+                        self.device_name, manufacturer, query
+                    )
+                    return results[0]['id']
+
+                if len(results) > 1:
+                    logging.error(
+                        "  Netbox %s: More than one manufacturer found with query '%s'!",
+                        self.device_name, query
+                    )
+                    return results[0]['id']
+
+            logging.warning(
+                "  Netbox %s: No manufacturer found for '%s'! "
+                "You should consider creating it in Netbox.",
+                self.device_name,
+                manufacturer
+            )
 
         device = self.get_device()
         server_manufacturer = device['device_type']['manufacturer']['id']
@@ -339,10 +377,18 @@ class NetboxInventoryUpdater:
                 )
             else:
                 if current_netbox_item:
+                    old = json.loads(old_netbox_item_json)
+                    new = json.loads(new_netbox_item_json.replace('""', 'null'))
+                    changed_fields = {
+                        k: {'old': old.get(k), 'new': new.get(k)}
+                        for k in new
+                        if str(old.get(k)) != str(new.get(k))
+                    }
                     logging.info(
-                        "  Netbox %s: Updating item %s",
+                        "  Netbox %s: Updating item %s — changed: %s",
                         self.device_name,
-                        new_netbox_item['name']
+                        new_netbox_item['name'],
+                        changed_fields
                     )
                     self.update_inventory_item(new_netbox_item_json, current_netbox_item['id'])
                 else:
