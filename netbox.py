@@ -125,7 +125,7 @@ class NetboxInventoryUpdater:
         self.device_name = device_name
         self.netbox_connection = netbox_connection
 
-    def get_manufacturer_id(self, manufacturer):
+    def get_manufacturer_id(self, manufacturer, item_name=None):
         """
         Get a manufacturer info from Netbox API.
 
@@ -189,10 +189,11 @@ class NetboxInventoryUpdater:
                     return results[0]['id']
 
             logging.warning(
-                "  Netbox %s: No manufacturer found for '%s'! "
+                "  Netbox %s: No manufacturer found for '%s'%s! "
                 "You should consider creating it in Netbox.",
                 self.device_name,
-                manufacturer
+                manufacturer,
+                f" (item: {item_name})" if item_name else ""
             )
 
         device = self.get_device()
@@ -361,7 +362,7 @@ class NetboxInventoryUpdater:
                     description = item.get('Name', "")
 
             new_netbox_item = {
-                'manufacturer': self.get_manufacturer_id(item['Manufacturer']),
+                'manufacturer': self.get_manufacturer_id(item['Manufacturer'], item.get('NetboxName')),
                 'description': description,
                 'name': item.get('NetboxName',""),
                 'device': netbox_device_id,
