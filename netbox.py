@@ -71,8 +71,11 @@ class NetboxConnection:
             raise NetboxConnectionException(message) from err
 
         if method == "GET" and response.json():
-            return response.json()
+            result = response.json()
+            response.close()
+            return result
 
+        response.close()
         return response
 
     def get_region(self):

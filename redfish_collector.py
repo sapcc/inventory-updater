@@ -85,6 +85,14 @@ class RedfishIventoryCollector:
             )
             return
 
+        if not session_service or 'Sessions' not in session_service:
+            logging.warning(
+                "  Target %s: No Sessions URL in response from server %s, falling back to basic auth.",
+                self.target, self.ip_address
+            )
+            self._basic_auth = True
+            return
+
         sessions_url = (
             f"https://{self.ip_address}"
             f"{session_service['Sessions']['@odata.id']}"
@@ -159,8 +167,8 @@ class RedfishIventoryCollector:
 
         logging.captureWarnings(True)
 
-        server_req = ""
-        server_response = ""
+        server_req = None
+        server_response = None
         self.last_http_code = 0
         request_start = time.time()
 
@@ -226,9 +234,13 @@ class RedfishIventoryCollector:
             else:
                 logging.error("  Target %s: Unable to connect to URL %s", self.target, url)
 
-        if server_req != "":
-            self.last_http_code = server_req.status_code
-            server_response = self._check_req_text(server_req)
+        try:
+            if server_req is not None:
+                self.last_http_code = server_req.status_code
+                server_response = self._check_req_text(server_req)
+        finally:
+            if server_req is not None:
+                server_req.close()
 
         request_duration = round(time.time() - request_start,2)
         logging.debug(
@@ -388,7 +400,7 @@ class RedfishIventoryCollector:
                             link = entry['@odata.id']
                         self._urls[url].append(link)
                 else:
-                    logging.warning(
+                    logging.debug(
                         "  Target %s: No %s URL found in Chassi info for Chassis %s!",
                         self.target,
                         url,
@@ -431,7 +443,14 @@ class RedfishIventoryCollector:
 
     def _get_storage_details(self, storage_collection, fields):
         # From the storage collection we get the URL for every single storage controller
-        for controller in storage_collection['Members']:
+        controllers = storage_collection.get('Members')
+        if not controllers:
+            logging.warning(
+                "  Target %s: Storage collection has no Members, skipping storage details.",
+                self.target
+            )
+            return
+        for controller in controllers:
             # get the actual controller data
             controller_data = self.connect_server(controller['@odata.id'])
             if not controller_data:
@@ -488,6 +507,17 @@ class RedfishIventoryCollector:
         for dimm_url in dimm_urls:
             dimm = self.connect_server(dimm_url)
             if not dimm:
+                continue
+
+            # Skip unpopulated DIMM slots to avoid timeouts on empty slot queries
+            dimm_status = dimm.get('Status', {})
+            if dimm_status.get('State') in ('Absent', 'UnavailableOffline'):
+                logging.debug(
+                    "  Target %s: Skipping unpopulated DIMM slot %s (State: %s)",
+                    self.target,
+                    dimm.get('Id', dimm_url),
+                    dimm_status.get('State')
+                )
                 continue
 
             dimm_info = self._get_device_info(dimm, fields)
@@ -792,7 +822,7 @@ class RedfishIventoryCollector:
     def _get_tpm_info(self):
 
         logging.info("  Target %s: Get the TPM data.", self.target)
-        systeminfo = self.connect_server(self._urls['Systems'], fields=['TrustedModules'])
+        systeminfo = self.connect_server(self._urls['Systems'])
         tpm_modules = []
 
         if systeminfo and systeminfo.get('TrustedModules'):

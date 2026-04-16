@@ -125,8 +125,11 @@ class InventoryContext:
         """Single method for all Redfish GET calls"""
         url = f"https://{bmc_address}{path}"
         response = requests.get(url, headers={"X-Auth-Token": session_token}, verify=False)
-        response.raise_for_status()
-        return response.json()
+        try:
+            response.raise_for_status()
+            return response.json()
+        finally:
+            response.close()
 
     def _netbox_patch(self, url: str, payload: Dict[str, Any]) -> None:
         """Single method for all Netbox PATCH operations"""
@@ -152,11 +155,15 @@ class InventoryContext:
         """
         url = f"https://{bmc_address}/redfish/v1/"
         resp = requests.get(url, verify=False)
+        resp.close()
         if resp.status_code == 200:
             return "/redfish/v1/SessionService/Sessions"
         # fallback with authentication if needed
         resp = requests.get(url, auth=(username, password), verify=False)
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        finally:
+            resp.close()
         return "/redfish/v1/SessionService/Sessions"
 
     def session_create_x_auth_token(self, server_rib: str, username: str, password: str, session_uri: str) -> Tuple[str, Optional[str]]:
@@ -164,18 +171,22 @@ class InventoryContext:
         payload = {"UserName": username, "Password": password}
         headers = {'content-type': 'application/json'}
         response = requests.post(url, json=payload, headers=headers, verify=False)
-        if response.headers.get("x-auth-token") is None:
-            logging.error("Not able to create token")
-            sys.exit(1)
-        data = response.json()
-        session_id = data["Id"]
-        session_token = response.headers.get("x-auth-token")
+        try:
+            if response.headers.get("x-auth-token") is None:
+                logging.error("Not able to create token")
+                sys.exit(1)
+            data = response.json()
+            session_id = data["Id"]
+            session_token = response.headers.get("x-auth-token")
+        finally:
+            response.close()
         return session_id, session_token
 
 
     def session_delete_x_auth_session(self, server_rib: str, session_x_auth_token: str, session_uri: str, session_id: str):
         url = f"https://{server_rib}{session_uri}/{session_id}"
-        requests.delete(url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
+        response = requests.delete(url, headers={"X-Auth-Token": session_x_auth_token}, verify=False)
+        response.close()
 
 
     def dell_redfish_get_network_interfaces(self, bmc_address, server_name_short, session_x_auth_token):
@@ -237,8 +248,11 @@ class InventoryContext:
                         nic2data = self._redfish_get(bmc_address, func['@odata.id'], session_x_auth_token)
                     else:
                         nic2_url = f"https://{bmc_address}{func['@odata.id']}"
-                        nic2_request = requests.get(nic2_url, auth=(self.args_user_name, self.args_password), verify=False)
-                        nic2data = nic2_request.json()
+                        nic2_response = requests.get(nic2_url, auth=(self.args_user_name, self.args_password), verify=False)
+                        try:
+                            nic2data = nic2_response.json()
+                        finally:
+                            nic2_response.close()
 
                     custom_field = f"{prefix}_{nicdata['Id']}_{nic2data['Id']}"
                     mac = nic2data.get("Ethernet", {}).get("MACAddress")
@@ -391,8 +405,11 @@ class InventoryContext:
     def get_remoteboard_mac(self, server_manufactorer, bmc_address):
         url = f"https://{bmc_address}{self.remoteboard_uri_key_mapping.get(server_manufactorer).get('uri')}"
         with requests.Session() as session:
-            remoteboard_response = session.get(url, auth=(self.args_user_name, self.args_password), verify=False).json()
-        return remoteboard_response[(self.remoteboard_uri_key_mapping.get(server_manufactorer).get("mac_key_name"))]
+            resp = session.get(url, auth=(self.args_user_name, self.args_password), verify=False)
+            try:
+                return resp.json()[(self.remoteboard_uri_key_mapping.get(server_manufactorer).get("mac_key_name"))]
+            finally:
+                resp.close()
 
 
     def nic_port_mapping(self, port_description: str) -> str:
