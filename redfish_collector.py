@@ -41,6 +41,8 @@ class RedfishIventoryCollector:
         self._auth_token = None
         self._basic_auth = False
         self._session = None
+        self._vendor = None
+        self._product = None
 
     def get_bmc_ip_address(self, target):
         """
@@ -72,6 +74,9 @@ class RedfishIventoryCollector:
 
         self._response_time = round(time.time() - start_time,2)
         logging.info("  Target %s: Response time: %s seconds.", self.target, self._response_time)
+
+        self._vendor = server_response.get('Vendor')
+        self._product = server_response.get('Product')
 
         session_service = self.connect_server(
             server_response['SessionService']['@odata.id'],
@@ -296,7 +301,7 @@ class RedfishIventoryCollector:
 
     def _get_system_urls(self):
 
-        systems = self.connect_server(self._urls['Systems_Root']+'?$expand=.')
+        systems = self.connect_server(self._urls['Systems_Root'])
 
         if not systems:
             logging.error(
@@ -318,14 +323,20 @@ class RedfishIventoryCollector:
                 self.target
             )
 
-        server_info = systems['Members'][0]
+        system_url = systems['Members'][0]['@odata.id']
+        self._urls.update({'Systems': system_url})
+
+        server_info = self.connect_server(system_url)
 
         if not server_info:
             logging.warning("  Target %s: No Server Info could be retrieved!", self.target)
             return
 
-        # Get the server info for the labels
-        self._urls.update({'Systems': server_info['@odata.id']})
+        logging.debug(
+            "  Target %s: System keys: %s",
+            self.target,
+            list(server_info.keys())
+        )
 
         fields = (
             'SKU',
@@ -339,6 +350,20 @@ class RedfishIventoryCollector:
 
         for field in fields:
             self._inventory.update({field: server_info.get(field)})
+
+        if not self._inventory.get('Manufacturer') and self._vendor:
+            logging.info(
+                "  Target %s: Manufacturer not in System data, using Vendor from /redfish/v1: %s",
+                self.target, self._vendor
+            )
+            self._inventory['Manufacturer'] = self._vendor
+
+        if not self._inventory.get('Model') and self._product:
+            logging.info(
+                "  Target %s: Model not in System data, using Product from /redfish/v1: %s",
+                self.target, self._product
+            )
+            self._inventory['Model'] = self._product
 
         logging.info("  Target %s: Server powerstate: %s",
                         self.target,
@@ -379,6 +404,13 @@ class RedfishIventoryCollector:
                     chassi['@odata.id']
                 )
                 continue
+
+            logging.debug(
+                "  Target %s: Chassis keys for %s: %s",
+                self.target,
+                chassi_info.get('Name', chassi['@odata.id']),
+                list(chassi_info.keys())
+            )
 
             urls = ('Power', 'PCIeDevices', 'NetworkAdapters')
             for url in urls:
