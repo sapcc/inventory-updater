@@ -199,7 +199,12 @@ class InventoryContext:
         memory_gb = round(memory_gib * 1.073741824)    # 1 GiB = 1.073741824 GB
         vendor = system_response["Manufacturer"]
         model = system_response["Model"]
-        serial = system_response["SKU"]
+        # Dell stores the chassis serial in SKU; all other vendors use SerialNumber.
+        # (SKU on HPE/Lenovo is the Product ID / order code, not the serial number.)
+        if hw_vendor == "Dell" or re.match(r'^[Dd]ell.*', vendor or ''):
+            serial = system_response.get("SKU", system_response.get("SerialNumber", ""))
+        else:
+            serial = system_response.get("SerialNumber", system_response.get("SKU", ""))
         health = system_response["Status"]["Health"]
         self.netbox_server_dict[server_name_short].update({"manufacturer": vendor, "model": model, "memory_gb": memory_gb, "serial_redfish": serial, "system_health": health})
 
@@ -540,13 +545,31 @@ class InventoryContext:
                     continue
 
                 if self.netbox_server_dict[item]["serial"] != serial_number:
-                    logging.warning("  %s: Netbox serial number NOT MATCHING", self.netbox_server_dict[item]["servername"])
+                    logging.warning(
+                        "  %s: Netbox serial number NOT MATCHING — Netbox: '%s', Redfish: '%s'",
+                        self.netbox_server_dict[item]["servername"],
+                        self.netbox_server_dict[item]["serial"],
+                        serial_number
+                    )
                     if self.netbox_server_dict[item]["serial"] == "":
                         self.netbox_write_serial_number(device_id, serial_number)
-                        logging.info("  %s: Netbox serial number empty. Writing serial number to Netbox.", self.netbox_server_dict[item]["servername"])
-                    if self.args_force_flag:
+                        logging.info(
+                            "  %s: Netbox serial number was empty — written '%s' to Netbox.",
+                            self.netbox_server_dict[item]["servername"],
+                            serial_number
+                        )
+                    elif self.args_force_flag:
                         self.netbox_write_serial_number(device_id, serial_number)
-                        logging.info("  %s: Mismatch serial number in Netbox. Changing in Netbox.", self.netbox_server_dict[item]["servername"])
+                        logging.info(
+                            "  %s: Force flag set — updated serial number in Netbox to '%s'.",
+                            self.netbox_server_dict[item]["servername"],
+                            serial_number
+                        )
+                    else:
+                        logging.warning(
+                            "  %s: Serial number not updated — use --force to override existing value.",
+                            self.netbox_server_dict[item]["servername"]
+                        )
                 else:
                     logging.info("  %s: Netbox serial number matching", self.netbox_server_dict[item]["servername"])
 
