@@ -64,10 +64,11 @@ class InventoryContext:
         self.remoteboard_uri_key_mapping = {"Dell": {"uri": "/redfish/v1/Managers/iDRAC.Embedded.1/EthernetInterfaces/NIC.1", "mac_key_name": "PermanentMACAddress"},
                                     "Lenovo": {"uri": "/redfish/v1/Managers/1/EthernetInterfaces/ToHost", "mac_key_name": "MACAddress"},
                                     "HPE": {"uri": "/redfish/v1/Managers/1/EthernetInterfaces/1", "mac_key_name": "MACAddress"},
-                                    "Supermicro": {"uri": "/redfish/v1/Managers/1/EthernetInterfaces/1", "mac_key_name": "MACAddress"}
+                                    "Supermicro": {"uri": "/redfish/v1/Managers/1/EthernetInterfaces/1", "mac_key_name": "MACAddress"},
+                                    "Fujitsu": {"uri": "/redfish/v1/Managers/iRMC/EthernetInterfaces/0", "mac_key_name": "MACAddress"}
                                     }
 
-        self.redfish_get_info_mapping = {"Dell": "System.Embedded.1", "Lenovo": "1", "HPE": "1", "Supermicro": "1"}
+        self.redfish_get_info_mapping = {"Dell": "System.Embedded.1", "Lenovo": "1", "HPE": "1", "Supermicro": "1", "Fujitsu": "0"}
 
         self.done_counter = 0
         self.error_counter = 0
@@ -78,12 +79,12 @@ class InventoryContext:
         self.template_nic_list = []
         self.template_nic_list_sorted = []
         self.mac_list = []
-        self.vendor_list = ["Dell", "Lenovo", "HPE", "Supermicro"]
+        self.vendor_list = ["Dell", "Lenovo", "HPE", "Supermicro", "Fujitsu"]
         self.server_manufacturer = ""
         self.custom_field = ""
         self.isNICNot4Port = False
         self.hpe_ilo_version_matrix = {"iLO 5": self.hpe_redfish_get_network_interfaces, "iLO 6": self.hpe_redfish_get_network_interfaces_ilo6}
-        self.manufacturer_interface = {"Dell": self.dell_redfish_get_network_interfaces, "Lenovo": self.lenovo_redfish_get_network_interfaces, "Supermicro": self.supermicro_redfish_get_network_interfaces}
+        self.manufacturer_interface = {"Dell": self.dell_redfish_get_network_interfaces, "Lenovo": self.lenovo_redfish_get_network_interfaces, "Supermicro": self.supermicro_redfish_get_network_interfaces, "Fujitsu": self.fujitsu_redfish_get_network_interfaces}
 
     def _get_config(self, key: str, default: Optional[str] = None) -> Optional[str]:
         """Get configuration value from environment variable or config file"""
@@ -111,6 +112,17 @@ class InventoryContext:
             'managers': f"/redfish/v1/Managers/{system_id}",
         }
         return base_paths.get(path.lower(), f"/redfish/v1/{path}")
+
+    def _redfish_discover_system_url(self, bmc_address: str, session_x_auth_token: str) -> str:
+        """
+        Discover the system URL by fetching /redfish/v1/Systems and following
+        the first member's @odata.id, instead of relying on hardcoded system IDs.
+        """
+        systems = self._redfish_get(bmc_address, "/redfish/v1/Systems", session_x_auth_token)
+        members = systems.get("Members", [])
+        if not members:
+            raise ValueError(f"No members found in /redfish/v1/Systems on {bmc_address}")
+        return members[0]["@odata.id"]
 
     def _add_nic_to_list(self, nic_list: list, custom_field: str, mac_address: str) -> None:
         """
@@ -189,9 +201,9 @@ class InventoryContext:
         response.close()
 
 
-    def dell_redfish_get_network_interfaces(self, bmc_address, server_name_short, session_x_auth_token):
+    def dell_redfish_get_network_interfaces(self, bmc_address, server_name_short, session_x_auth_token, system_url):
         nic_list = list()
-        interfaces_response = self._redfish_get(bmc_address, "/redfish/v1/Systems/System.Embedded.1/EthernetInterfaces/", session_x_auth_token)
+        interfaces_response = self._redfish_get(bmc_address, f"{system_url}/EthernetInterfaces/", session_x_auth_token)
         interface_members = interfaces_response["Members"]
 
         for entry in interface_members:
@@ -203,9 +215,24 @@ class InventoryContext:
         self.netbox_server_dict[server_name_short].update({"nics": nic_list})
 
 
-    def server_redfish_get_system_info(self, server_name_bmc, server_name_short, session_x_auth_token, hw_vendor):
-        system_id = self.redfish_get_info_mapping.get(hw_vendor)
-        system_response = self._redfish_get(server_name_bmc, f"{self._redfish_url('systems', system_id)}", session_x_auth_token)
+    def fujitsu_redfish_get_network_interfaces(self, bmc_address, server_name_short, session_x_auth_token, system_url):
+        nic_list = list()
+        interfaces_response = self._redfish_get(bmc_address, f"{system_url}/EthernetInterfaces", session_x_auth_token)
+        interface_members = interfaces_response.get("Members", [])
+
+        for entry in interface_members:
+            nic = entry["@odata.id"]
+            nicdata = self._redfish_get(bmc_address, nic, session_x_auth_token)
+            mac = nicdata.get("MACAddress") or nicdata.get("PermanentMACAddress")
+            if mac:
+                description = nicdata.get("Description") or nicdata.get("Name") or nicdata.get("Id", "")
+                self._add_nic_to_list(nic_list, description, mac)
+
+        self.netbox_server_dict[server_name_short].update({"nics": nic_list})
+
+
+    def server_redfish_get_system_info(self, server_name_bmc, server_name_short, session_x_auth_token, hw_vendor, system_url):
+        system_response = self._redfish_get(server_name_bmc, system_url, session_x_auth_token)
         memory_gib = system_response["MemorySummary"]["TotalSystemMemoryGiB"]
         memory_gb = round(memory_gib * 1.073741824)    # 1 GiB = 1.073741824 GB
         vendor = system_response["Manufacturer"]
@@ -220,7 +247,7 @@ class InventoryContext:
         self.netbox_server_dict[server_name_short].update({"manufacturer": vendor, "model": model, "memory_gb": memory_gb, "serial_redfish": serial, "system_health": health})
 
 
-    def lenovo_redfish_get_network_interfaces(self, bmc_address, server_name_short, session_x_auth_token):
+    def lenovo_redfish_get_network_interfaces(self, bmc_address, server_name_short, session_x_auth_token, *_):
         nic_list = []
         adapters_members = self._redfish_get(bmc_address, f"{self._redfish_url('chassis')}/NetworkAdapters/", session_x_auth_token)["Members"]
 
@@ -262,9 +289,9 @@ class InventoryContext:
         self.netbox_server_dict[server_name_short].update({"nics": nic_list})
 
 
-    def hpe_redfish_get_network_interfaces(self,bmc_address, server_name_short, session_x_auth_token):
+    def hpe_redfish_get_network_interfaces(self, bmc_address, server_name_short, session_x_auth_token, system_url):
         nic_list = list()
-        adapters_response = self._redfish_get(bmc_address, f"{self._redfish_url('systems')}/BaseNetworkAdapters/", session_x_auth_token)
+        adapters_response = self._redfish_get(bmc_address, f"{system_url}/BaseNetworkAdapters/", session_x_auth_token)
         adapters_data = adapters_response["Members"]
         for adapter_entry in adapters_data:
             adapter_data = self._redfish_get(bmc_address, adapter_entry['@odata.id'], session_x_auth_token)
@@ -291,9 +318,9 @@ class InventoryContext:
         self.netbox_server_dict[server_name_short].update({"nics": nic_list})
 
 
-    def hpe_redfish_get_network_interfaces_ilo6(self, bmc_address, server_name_short, session_x_auth_token):
+    def hpe_redfish_get_network_interfaces_ilo6(self, bmc_address, server_name_short, session_x_auth_token, system_url):
         nic_list = list()
-        pci_devices_response = self._redfish_get(bmc_address, f"{self._redfish_url('systems')}/PCIDevices/", session_x_auth_token)
+        pci_devices_response = self._redfish_get(bmc_address, f"{system_url}/PCIDevices/", session_x_auth_token)
         pci_devices_members = pci_devices_response["Members"]
         for device_index in range(0, len(pci_devices_members)):
             nic = pci_devices_response["Members"][device_index]["@odata.id"]
@@ -339,7 +366,7 @@ class InventoryContext:
         return manager_response["Model"]
 
 
-    def supermicro_redfish_get_network_interfaces(self, bmc_address, server_name_short, session_x_auth_token):
+    def supermicro_redfish_get_network_interfaces(self, bmc_address, server_name_short, session_x_auth_token, system_url):
         nic_list = list()
         adapters_response = self._redfish_get(bmc_address, f"{self._redfish_url('chassis')}/NetworkAdapters/", session_x_auth_token)
         adapters_members = adapters_response["Members"]
@@ -356,7 +383,7 @@ class InventoryContext:
                             self._add_nic_to_list(nic_list, custom_field, nic2data["Ethernet"]["MACAddress"])
                             custom_field = ""
         self.netbox_server_dict[server_name_short].update({"nics": nic_list})
-        ethernet_interfaces_response = self._redfish_get(bmc_address, f"{self._redfish_url('systems')}/EthernetInterfaces", session_x_auth_token)
+        ethernet_interfaces_response = self._redfish_get(bmc_address, f"{system_url}/EthernetInterfaces", session_x_auth_token)
         ethernet_interfaces_members = ethernet_interfaces_response["Members"]
         for interface in ethernet_interfaces_members:
             nicdata = self._redfish_get(bmc_address, interface['@odata.id'], session_x_auth_token)
@@ -377,6 +404,12 @@ class InventoryContext:
                 if entry["device_type"]["manufacturer"]["name"] in self.vendor_list:
                     self.netbox_server_dict[entry["name"]] = {"device_id": entry["id"], "servername": entry["name"], "serial": entry["serial"]}
                     self.server_manufacturer = entry["device_type"]["manufacturer"]["name"]
+                else:
+                    logging.warning(
+                        "  %s: Vendor '%s' is not supported for serial/MAC collection. Add it to vendor_list in mac_serial.py.",
+                        entry["name"],
+                        entry["device_type"]["manufacturer"]["name"]
+                    )
 
             for device_name_entry in self.netbox_server_dict:
                 url = f"{self.url_netbox_ip_device}{device_name_entry}"
@@ -511,8 +544,11 @@ class InventoryContext:
                 session_uri = self.session_get_redfish_link(board_address, self.args_user_name, self.args_password)
                 session_id, session_x_auth_token = self.session_create_x_auth_token(board_address, self.args_user_name, self.args_password, session_uri)
 
+                # Discover system URL once — avoids hardcoded IDs like "System.Embedded.1" or "0"
+                system_url = self._redfish_discover_system_url(board_address, session_x_auth_token)
+
                 # Get system info
-                self.server_redfish_get_system_info(board_address, server, session_x_auth_token, vendor)
+                self.server_redfish_get_system_info(board_address, server, session_x_auth_token, vendor, system_url)
 
                 logging.info("  %s: Collecting Redfish Infos", server)
 
@@ -524,7 +560,12 @@ class InventoryContext:
                     network_fn = self.manufacturer_interface.get(vendor)
 
                 if network_fn:
-                    network_fn(board_address, server, session_x_auth_token)
+                    network_fn(board_address, server, session_x_auth_token, system_url)
+                else:
+                    logging.warning(
+                        "  %s: No NIC collection method for vendor '%s'. Add it to manufacturer_interface in mac_serial.py.",
+                        server, vendor
+                    )
 
                 # Cleanup session
                 self.session_delete_x_auth_session(board_address, session_x_auth_token, session_uri, session_id)

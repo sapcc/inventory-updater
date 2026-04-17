@@ -133,16 +133,30 @@ class NetboxInventoryUpdater:
         broader queries against Netbox's substring-search 'q' parameter:
 
           1. Full cleaned name  e.g. "Intel Corporation"  → no match
-          2. Each individual word in the cleaned name, longest first:
-               "Corporation" → no match, "Intel" → match ✓
+          2. Each individual word in the cleaned name — distinctive words first
+             (generic suffixes like "Corporation", "Inc", "Ltd" are tried last):
+               "Intel" → match ✓
           3. CamelCase-split tokens of the original name, e.g. "Skhynix" →
              ["Sk", "hynix"] — "hynix" matches "Hynix Semiconductor" ✓
         """
+        _GENERIC_SUFFIXES = frozenset({
+            'corporation', 'corp', 'incorporated', 'inc', 'limited', 'ltd',
+            'company', 'co', 'group', 'holdings', 'international', 'technologies',
+            'technology', 'semiconductor', 'systems', 'electronics',
+        })
+        # Well-known abbreviations that Netbox stores under their full trade name.
+        _ALIASES = {
+            'mlnx': 'Mellanox',
+            'mellanox': 'Mellanox',
+        }
         url = self.netbox_connection.netbox_manufacturers_url
         if manufacturer:
             # Strip trademark/registered symbols and normalise whitespace
             clean = re.sub(r'[\(®™]\s*(?:R|TM)\s*\)', '', manufacturer)
             clean = re.sub(r'[®™]', '', clean).strip()
+
+            # Replace known abbreviations before any query logic
+            clean = _ALIASES.get(clean.lower(), clean)
 
             # Build candidate query list, deduplicating while preserving order.
             # CamelCase split: "SKHynix" → ["SK", "Hynix"], "Skhynix" → ["Skhynix"]
@@ -156,7 +170,7 @@ class NetboxInventoryUpdater:
                         suffix_tokens.append(word[i:])
             candidates = (
                 [clean]
-                + sorted(set(clean.split()), key=len, reverse=True)
+                + sorted(clean.split(), key=lambda w: (w.lower() in _GENERIC_SUFFIXES, -len(w)))
                 + camel_tokens
                 + suffix_tokens
             )

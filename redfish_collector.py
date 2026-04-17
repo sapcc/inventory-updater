@@ -332,12 +332,6 @@ class RedfishIventoryCollector:
             logging.warning("  Target %s: No Server Info could be retrieved!", self.target)
             return
 
-        logging.debug(
-            "  Target %s: System keys: %s",
-            self.target,
-            list(server_info.keys())
-        )
-
         fields = (
             'SKU',
             'SerialNumber',
@@ -404,13 +398,6 @@ class RedfishIventoryCollector:
                     chassi['@odata.id']
                 )
                 continue
-
-            logging.debug(
-                "  Target %s: Chassis keys for %s: %s",
-                self.target,
-                chassi_info.get('Name', chassi['@odata.id']),
-                list(chassi_info.keys())
-            )
 
             urls = ('Power', 'PCIeDevices', 'NetworkAdapters')
             for url in urls:
@@ -686,7 +673,7 @@ class RedfishIventoryCollector:
             if not drive['PartNumber']:
                 drive['PartNumber'] = drive['Model']
 
-            if drive['CapacityBytes'] > 0:
+            if (drive['CapacityBytes'] or 0) > 0:
                 if (drive['Protocol'] in ["PCIe", "NVMe"] and
                         drive['MediaType'] == "SSD") or "NVMe" in drive['Name']:
                     drive['NetboxName'] = (
@@ -826,7 +813,8 @@ class RedfishIventoryCollector:
         logging.info("  Target %s: Get the NetworkAdapters data.", self.target)
         nic_urls = self._get_urls('NetworkAdapters')
         if not nic_urls:
-            logging.warning("  Target %s: No NIC URLs found!", self.target)
+            logging.warning("  Target %s: No NIC URLs found in NetworkAdapters, trying EthernetInterfaces fallback.", self.target)
+            self._get_network_info_from_ethernet_interfaces()
             return
 
         network_cards = self._get_info_from_urls(nic_urls, fields)
@@ -850,6 +838,91 @@ class RedfishIventoryCollector:
             network_cards_updated.append(nic)
 
         self._inventory.update({'NetworkAdapters': network_cards_updated})
+
+    def _get_network_info_from_ethernet_interfaces(self):
+        """Fallback for vendors (e.g. Fujitsu) where NetworkAdapters is empty.
+        Tries EthernetInterfaces first, then NetworkInterfaces → NetworkDeviceFunctions."""
+        network_cards_updated = self._collect_from_ethernet_interfaces()
+        if not network_cards_updated:
+            network_cards_updated = self._collect_from_network_interfaces()
+
+        if network_cards_updated:
+            logging.info("  Target %s: Found %d NIC(s) via EthernetInterfaces/NetworkInterfaces fallback.",
+                         self.target, len(network_cards_updated))
+        else:
+            logging.warning("  Target %s: No NIC data found in EthernetInterfaces or NetworkInterfaces.", self.target)
+
+        self._inventory.update({'NetworkAdapters': network_cards_updated})
+
+    def _collect_from_ethernet_interfaces(self):
+        if not self._urls.get('EthernetInterfaces'):
+            return []
+        logging.info("  Target %s: Trying EthernetInterfaces for NIC data.", self.target)
+        iface_urls = self._get_urls('EthernetInterfaces')
+        if not iface_urls:
+            logging.debug("  Target %s: EthernetInterfaces collection is empty.", self.target)
+            return []
+        nics = []
+        for iface_url in iface_urls:
+            iface = self.connect_server(iface_url)
+            if not iface:
+                continue
+            speed_mbps = iface.get('SpeedMbps') or 0
+            speed_gbps = round(speed_mbps / 1000) if speed_mbps else 0
+            nics.append({
+                'Name': iface.get('Name') or iface.get('Id', ''),
+                'Manufacturer': iface.get('Manufacturer') or self._inventory.get('Manufacturer', ''),
+                'Model': iface.get('Model', ''),
+                'SerialNumber': iface.get('SerialNumber', ''),
+                'PartNumber': iface.get('PartNumber', ''),
+                'SKU': iface.get('SKU', ''),
+                'NetboxName': f"NIC {speed_gbps}Gb" if speed_gbps else "NIC",
+            })
+        return nics
+
+    def _collect_from_network_interfaces(self):
+        """Walk NetworkInterfaces → NetworkDeviceFunctions to find NIC hardware entries.
+        This path is BMC-resident and available even when the host is powered off."""
+        if not self._urls.get('NetworkInterfaces'):
+            return []
+        logging.info("  Target %s: Trying NetworkInterfaces for NIC data.", self.target)
+        ni_urls = self._get_urls('NetworkInterfaces')
+        if not ni_urls:
+            logging.debug("  Target %s: NetworkInterfaces collection is empty.", self.target)
+            return []
+        nics = []
+        for ni_url in ni_urls:
+            ni = self.connect_server(ni_url)
+            if not ni:
+                continue
+            # NetworkDeviceFunctions are linked from NetworkInterface
+            ndf_link = ni.get('NetworkDeviceFunctions', {}).get('@odata.id') if ni.get('NetworkDeviceFunctions') else None
+            if not ndf_link:
+                continue
+            ndf_collection = self.connect_server(ndf_link)
+            if not ndf_collection or not ndf_collection.get('Members'):
+                continue
+            for member in ndf_collection['Members']:
+                ndf = self.connect_server(member['@odata.id'])
+                if not ndf:
+                    continue
+                # Only include Ethernet device functions
+                if ndf.get('DeviceEnabled') is False:
+                    continue
+                eth = ndf.get('Ethernet', {})
+                mac = eth.get('PermanentMACAddress') or eth.get('MACAddress')
+                if not mac:
+                    continue
+                nics.append({
+                    'Name': ndf.get('Name') or ndf.get('Id', ''),
+                    'Manufacturer': ndf.get('Manufacturer') or ni.get('Manufacturer') or self._inventory.get('Manufacturer', ''),
+                    'Model': ndf.get('Model', ''),
+                    'SerialNumber': ndf.get('SerialNumber', ''),
+                    'PartNumber': ndf.get('PartNumber', ''),
+                    'SKU': ndf.get('SKU', ''),
+                    'NetboxName': "NIC",
+                })
+        return nics
 
     def _get_tpm_info(self):
 
