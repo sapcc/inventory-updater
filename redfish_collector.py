@@ -530,7 +530,7 @@ class RedfishIventoryCollector:
 
             # Skip unpopulated DIMM slots to avoid timeouts on empty slot queries
             dimm_status = dimm.get('Status', {})
-            if dimm_status.get('State') in ('Absent', 'UnavailableOffline'):
+            if dimm_status.get('State') == 'Absent':
                 logging.debug(
                     "  Target %s: Skipping unpopulated DIMM slot %s (State: %s)",
                     self.target,
