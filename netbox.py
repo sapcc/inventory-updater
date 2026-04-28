@@ -402,6 +402,12 @@ class NetboxInventoryUpdater:
                         for k in new
                         if str(old.get(k)) != str(new.get(k))
                     }
+                    if 'manufacturer' in changed_fields:
+                        old_mfr = current_netbox_item.get('manufacturer') or {}
+                        changed_fields['manufacturer'] = {
+                            'old': old_mfr.get('name', old.get('manufacturer')),
+                            'new': item.get('Manufacturer', new.get('manufacturer'))
+                        }
                     logging.info(
                         "  Netbox %s: Updating item %s — changed: %s",
                         self.device_name,
