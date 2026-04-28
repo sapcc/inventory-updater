@@ -12,6 +12,7 @@ import warnings
 import time
 import gc       # Garbage collection module
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from wsgiref.simple_server import make_server, WSGIServer, WSGIRequestHandler
 from socketserver import ThreadingMixIn
 import yaml
@@ -174,29 +175,33 @@ def run_inventory_loop(config, connection):
     """
     Loop to check the inventory of the servers
     """
-    scrape_interval = os.getenv('SCRAPE_INTERVAL', config.get('scrape_interval', 21600))
+    scrape_interval = int(os.getenv('SCRAPE_INTERVAL', config.get('scrape_interval', 0)))
+    workers = int(os.getenv('WORKERS', config.get('workers', 10)))
     serverlist = []
+
+    def process_server(server):
+        server = server.replace('\r','').replace('\n','')
+        try:
+            collector = InventoryCollector(config, connection)
+            collector.process_single_server(server)
+        except (HandlerException, NetboxConnectionException) as err:
+            logging.error(err)
 
     while True:
         try:
+            round_start = time.time()
 
             try:
                 serverlist = get_serverlist(config, connection)
             except NetboxConnectionException as err:
                 logging.error(err)
 
-            for server in serverlist:
-                try:
-                    server = server.replace('\r','').replace('\n','')
-                    collector = InventoryCollector(config, connection)
-
-                    # Process single server (inventory + MAC/serial)
-                    collector.process_single_server(server)
-
-                except (HandlerException, NetboxConnectionException) as err:
-                    logging.error(err)
-
-                del collector
+            logging.info("==> Processing %s devices with %s workers.", len(serverlist), workers)
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {executor.submit(process_server, server): server for server in serverlist}
+                for future in as_completed(futures):
+                    if future.exception():
+                        logging.error("Unhandled error processing %s: %s", futures[future], future.exception())
 
             gc.collect() # trigger garbage collection
 
@@ -204,8 +209,14 @@ def run_inventory_loop(config, connection):
             logging.info("Keyboard Interrupt. Stopping Inventory Updater...")
             sys.exit()
 
-        logging.info("==> Sleeping for %s seconds.", scrape_interval)
-        time.sleep(scrape_interval)
+        if scrape_interval > 0:
+            elapsed = time.time() - round_start
+            sleep_time = max(0, scrape_interval - elapsed)
+            if sleep_time > 0:
+                logging.info("==> Round finished in %.0f seconds. Sleeping for %.0f seconds.", elapsed, sleep_time)
+                time.sleep(sleep_time)
+            else:
+                logging.info("==> Round finished in %.0f seconds, exceeding interval of %s seconds. Starting next round immediately.", elapsed, scrape_interval)
 
 
 
