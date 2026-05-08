@@ -425,6 +425,121 @@ class NetboxInventoryUpdater:
 
             counter += 1
 
+    def update_device_inventory_and_mac_serial(self, inventory):
+        """
+        Unified method to update both inventory items AND MAC/serial data.
+        
+        Args:
+            inventory: Device inventory from redfish_collector
+                       (includes 'mac_serial_data' key if available)
+        """
+        # UPDATE INVENTORY ITEMS (existing functionality)
+        self.update_device_inventory(inventory)
+        
+        # UPDATE MAC/SERIAL IF PROVIDED (new functionality)
+        mac_serial_data = inventory.get('mac_serial_data')
+        if mac_serial_data:
+            try:
+                device = self.get_device()
+                if not device:
+                    logging.warning("  Netbox %s: Could not get device info", self.device_name)
+                    return
+                
+                # Update device serial number
+                if mac_serial_data.get('serial'):
+                    self._update_device_serial(device, mac_serial_data['serial'])
+                
+                # Update interface MAC addresses
+                if mac_serial_data.get('macs'):
+                    self._update_interface_macs(device, mac_serial_data['macs'])
+                    
+            except Exception as err:
+                logging.warning(
+                    "  Netbox %s: Failed to update MAC/serial data: %s",
+                    self.device_name, err
+                )
+                # Non-fatal error - don't fail the entire operation
+
+    def _update_device_serial(self, device, serial_number):
+        """Update device serial number if it differs from Netbox."""
+        # Normalize both serials by stripping whitespace for comparison
+        current_serial = str(device.get('serial', '')).strip()
+        new_serial = str(serial_number).strip()
+        
+        if current_serial == new_serial:
+            logging.info("  Netbox %s: Serial number already current", self.device_name)
+            return
+        
+        url = f"{self.netbox_connection.netbox_devices_url}{device['id']}/"
+        payload = json.dumps({"serial": serial_number})
+        
+        try:
+            self.netbox_connection.send_request(url, 'PATCH', data=payload)
+            logging.info(
+                "  Netbox %s: Updated serial to %s",
+                self.device_name, serial_number
+            )
+        except Exception as err:
+            logging.warning(
+                "  Netbox %s: Failed to update serial: %s",
+                self.device_name, err
+            )
+
+    def _update_interface_macs(self, device, macs_dict):
+        """Update MAC addresses for device interfaces."""
+        try:
+            # Fetch device interfaces
+            url = f"{self.netbox_connection.netbox_url}/api/dcim/interfaces/"
+            params = {'device_id': device['id']}
+            response = self.netbox_connection.send_request(url, 'GET', params=params)
+            interfaces = response.get('results', [])
+            
+            if not interfaces:
+                logging.warning("  Netbox %s: No interfaces found", self.device_name)
+                return
+            
+            # Update each interface MAC
+            for mac_key, mac_address in macs_dict.items():
+                self._update_single_interface_mac(interfaces, mac_key, mac_address)
+                
+        except Exception as err:
+            logging.warning(
+                "  Netbox %s: Failed to update interface MACs: %s",
+                self.device_name, err
+            )
+
+    def _update_single_interface_mac(self, interfaces, interface_name, mac_address):
+        """Update a single interface MAC address."""
+        for interface in interfaces:
+            if interface['name'].lower() == interface_name.lower():
+                if interface.get('mac_address') == mac_address.upper():
+                    logging.debug(
+                        "  Netbox %s: MAC already current for %s",
+                        self.device_name, interface_name
+                    )
+                    return
+                
+                try:
+                    url = f"{self.netbox_connection.netbox_url}/api/dcim/interfaces/{interface['id']}/"
+                    payload = json.dumps({"mac_address": mac_address.upper()})
+                    
+                    self.netbox_connection.send_request(url, 'PATCH', data=payload)
+                    logging.info(
+                        "  Netbox %s: Updated %s MAC to %s",
+                        self.device_name, interface_name, mac_address
+                    )
+                except Exception as err:
+                    logging.warning(
+                        "  Netbox %s: Failed to update MAC for %s: %s",
+                        self.device_name, interface_name, err
+                    )
+                return
+        
+        logging.debug(
+            "  Netbox %s: Interface %s not found in Netbox",
+            self.device_name, interface_name
+        )
+
     def filter_items(self, inventory_items, filter_string):
         """
         Filter the Netbox inventory items by name
@@ -654,3 +769,4 @@ class NetboxInventoryUpdater:
                 server_inventory = server_inventory_tpm,
                 netbox_inventory = netbox_inventory_tpm
             )
+

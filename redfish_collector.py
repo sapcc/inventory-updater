@@ -343,7 +343,11 @@ class RedfishIventoryCollector:
         )
 
         for field in fields:
-            self._inventory.update({field: server_info.get(field)})
+            field_value = server_info.get(field)
+            # Strip trailing whitespace from string fields for consistent comparison
+            if isinstance(field_value, str):
+                field_value = field_value.rstrip()
+            self._inventory.update({field: field_value})
 
         if not self._inventory.get('Manufacturer') and self._vendor:
             logging.info(
@@ -528,14 +532,15 @@ class RedfishIventoryCollector:
             if not dimm:
                 continue
 
-            # Skip unpopulated DIMM slots to avoid timeouts on empty slot queries
+            # Skip only empty (Absent) slots — those have no physical DIMM.
+            # UnavailableOffline means the CPU is in low-power state but the DIMM is present;
+            # count it. If the URL times out, connect_server already returned None above.
             dimm_status = dimm.get('Status', {})
             if dimm_status.get('State') == 'Absent':
                 logging.debug(
-                    "  Target %s: Skipping unpopulated DIMM slot %s (State: %s)",
+                    "  Target %s: Skipping DIMM slot %s (State: Absent)",
                     self.target,
-                    dimm.get('Id', dimm_url),
-                    dimm_status.get('State')
+                    dimm.get('Id', dimm_url)
                 )
                 continue
 
@@ -943,6 +948,84 @@ class RedfishIventoryCollector:
 
         self._inventory.update({'TrustedModules': tpm_modules})
 
+    def _get_remoteboard_mac(self):
+        """Get the MAC address from the BMC's management interface."""
+        remoteboard_macs = {}
+        
+        vendor = self._vendor or self._inventory.get('Manufacturer', '')
+        
+        # Vendor-specific BMC NIC endpoints
+        remoteboard_mapping = {
+            "Dell": "/redfish/v1/Managers/iDRAC.Embedded.1/EthernetInterfaces/NIC.1",
+            "Lenovo": "/redfish/v1/Managers/1/EthernetInterfaces/ToHost",
+            "HPE": "/redfish/v1/Managers/1/EthernetInterfaces/1",
+            "Supermicro": "/redfish/v1/Managers/1/EthernetInterfaces/1",
+            "Fujitsu": "/redfish/v1/Managers/iRMC/EthernetInterfaces/0"
+        }
+        
+        mac_key_mapping = {
+            "Dell": "PermanentMACAddress",
+            "Lenovo": "MACAddress",
+            "HPE": "MACAddress",
+            "Supermicro": "MACAddress",
+            "Fujitsu": "MACAddress"
+        }
+        
+        if vendor in remoteboard_mapping:
+            try:
+                response = self.connect_server(remoteboard_mapping[vendor])
+                if response:
+                    mac_key = mac_key_mapping.get(vendor, "MACAddress")
+                    mac = response.get(mac_key)
+                    if mac:
+                        remoteboard_macs['remoteboard'] = mac
+            except Exception as err:
+                logging.warning(
+                    "  Target %s: Failed to get remoteboard MAC: %s",
+                    self.target, err
+                )
+        
+        return remoteboard_macs
+
+    def get_mac_serial_data(self):
+        """
+        Return consolidated MAC address and serial number data.
+        Used for updating Netbox interfaces and device records.
+        
+        Returns:
+            dict: MAC/serial information
+        """
+        serial = self._inventory.get('SerialNumber', '')
+        # Ensure serial is stripped of trailing whitespace for consistent comparison
+        if isinstance(serial, str):
+            serial = serial.rstrip()
+        
+        mac_serial_data = {
+            'serial': serial,
+            'manufacturer': self._inventory.get('Manufacturer', ''),
+            'model': self._inventory.get('Model', ''),
+            'memory_gb': round(
+                self._inventory.get('MemorySummary', {})
+                .get('TotalSystemMemoryGiB', 0) * 1.073741824
+            ),
+            'health': self._inventory.get('Status', {}).get('Health', 'Unknown'),
+            'macs': {}
+        }
+        
+        # Collect MAC addresses from network adapters
+        if self._inventory.get('NetworkAdapters'):
+            for idx, adapter in enumerate(self._inventory['NetworkAdapters']):
+                for port_idx, port in enumerate(adapter.get('Ports', [])):
+                    mac = port.get('MAC')
+                    if mac:
+                        key = f"NIC{idx+1}_Port{port_idx+1}"
+                        mac_serial_data['macs'][key] = mac
+        
+        # Collect remoteboard MAC
+        mac_serial_data['macs'].update(self._get_remoteboard_mac())
+        
+        return mac_serial_data
+
     def _collect_component_data(self, component, method, component_name, fields=None):
         if component in self._urls and self._urls[component]:
             if fields:
@@ -1014,6 +1097,10 @@ class RedfishIventoryCollector:
             'NetworkPorts', 'Ports'
             )
         )
+
+        # Collect MAC/serial data while session is active (OPTIMIZATION)
+        mac_serial_data = self.get_mac_serial_data()
+        self._inventory['mac_serial_data'] = mac_serial_data
 
         duration = round(time.time() - self._start_time, 2)
         logging.info("  Target %s: Scrape duration: %s seconds", self.target, duration)
