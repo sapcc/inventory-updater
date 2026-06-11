@@ -1118,16 +1118,15 @@ class RedfishIventoryCollector:
                 self.ip_address
             )
             session_url = f"https://{self.ip_address}{self.session_url}"
-            headers = {'x-auth-token': self._auth_token}
 
             logging.debug("  Target %s: Using URL %s", self.target, session_url)
 
             try:
-                response = requests.delete(
+                response = self._session.delete(
                     session_url,
                     verify=False,
                     timeout=self.timeout,
-                    headers=headers
+                    headers={'x-auth-token': self._auth_token}
                 )
             except requests.exceptions.ReadTimeout as err:
                 logging.warning(
