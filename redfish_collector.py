@@ -619,7 +619,11 @@ class RedfishIventoryCollector:
 
         # Dell R750xd, XE9680
         else:
-            port['MAC'] = port_info.get('AssociatedNetworkAddresses')
+            macs = port_info.get('AssociatedNetworkAddresses')
+            if isinstance(macs, list):
+                port['MAC'] = macs[0] if macs else None
+            else:
+                port['MAC'] = macs
 
         if 'SupportedLinkCapabilities' not in port_info and 'CurrentSpeedGbps' not in port_info:
             logging.warning(
