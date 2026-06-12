@@ -509,8 +509,11 @@ class NetboxInventoryUpdater:
 
     def _update_single_interface_mac(self, interfaces, interface_name, mac_address):
         """Update a single interface MAC address."""
+        def normalise(name):
+            return re.sub(r'[-_ ]+', '', name).lower()
+
         for interface in interfaces:
-            if interface['name'].lower() == interface_name.lower():
+            if normalise(interface['name']) == normalise(interface_name):
                 if interface.get('mac_address') == mac_address.upper():
                     logging.info(
                         "  Netbox %s: MAC already current for %s",
