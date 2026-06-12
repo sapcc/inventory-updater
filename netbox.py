@@ -20,6 +20,7 @@ class NetboxConnection:
     def __init__(self, config):
         self.region = os.getenv("REGION", config.get('region'))
         self.netbox_query = os.getenv("NETBOX_QUERY", config.get('netbox', {}).get('query'))
+        self.manufacturer_aliases = config.get('manufacturer_aliases', {})
 
         self.netbox_url = os.getenv("NETBOX_URL", config.get('netbox', {}).get('url'))
         self.netbox_inventory_items_url = f"{self.netbox_url}/api/dcim/inventory-items/"
@@ -145,10 +146,8 @@ class NetboxInventoryUpdater:
             'technology', 'semiconductor', 'systems', 'electronics',
         })
         # Well-known abbreviations that Netbox stores under their full trade name.
-        _ALIASES = {
-            'mlnx': 'Mellanox',
-            'mellanox': 'Mellanox',
-        }
+        # Loaded from config (manufacturer_aliases).
+        _ALIASES = {k.lower(): v for k, v in self.netbox_connection.manufacturer_aliases.items()}
         url = self.netbox_connection.netbox_manufacturers_url
         if manufacturer:
             # Strip trademark/registered symbols and normalise whitespace
@@ -206,7 +205,7 @@ class NetboxInventoryUpdater:
                 "  Netbox %s: No manufacturer found for '%s'%s! "
                 "You should consider creating it in Netbox.",
                 self.device_name,
-                manufacturer,
+                clean,
                 f" (item: {item_name})" if item_name else ""
             )
 
@@ -513,7 +512,7 @@ class NetboxInventoryUpdater:
         for interface in interfaces:
             if interface['name'].lower() == interface_name.lower():
                 if interface.get('mac_address') == mac_address.upper():
-                    logging.debug(
+                    logging.info(
                         "  Netbox %s: MAC already current for %s",
                         self.device_name, interface_name
                     )

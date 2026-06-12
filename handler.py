@@ -154,11 +154,12 @@ class InventoryCollector:
 
         try:
             server_collector = RedfishIventoryCollector(
-                timeout     = int(os.getenv('CONNECTION_TIMEOUT',
-                                            self.config.get('connection_timeout', 30))),
-                target      = bmc,
-                usr         = self.usr,
-                pwd         = self.pwd
+                timeout        = int(os.getenv('CONNECTION_TIMEOUT',
+                                               self.config.get('connection_timeout', 30))),
+                target         = bmc,
+                usr            = self.usr,
+                pwd            = self.pwd,
+                vendor_aliases = self.netbox_connection.manufacturer_aliases
             )
             server_collector.get_session()
 
@@ -193,6 +194,8 @@ class InventoryCollector:
             logging.info("==> Server %s: Updating Netbox inventory", server)
             
             updater.update_device_inventory_and_mac_serial(inventory)
+
+            logging.info("==> Server %s: Done.", server)
 
             del inventory
             del updater

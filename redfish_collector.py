@@ -16,14 +16,14 @@ class RedfishIventoryCollector:
     collects the inventory from a server using Redfish
     """
 
-    def __init__(self, timeout, target, usr, pwd):
+    def __init__(self, timeout, target, usr, pwd, vendor_aliases=None):
 
         self.target = target
         self.ip_address = self.get_bmc_ip_address(target)
 
-
         self._username = usr
         self._password = pwd
+        self._vendor_aliases = {k.lower(): v for k, v in (vendor_aliases or {}).items()}
 
         self.timeout = timeout
         self._response_time = 0
@@ -191,6 +191,7 @@ class RedfishIventoryCollector:
         self._session.verify = False
         self._session.headers.update({'charset': 'utf-8'})
         self._session.headers.update({'content-type': 'application/json'})
+        self._session.headers.update({'Accept': 'application/json'})
 
         if noauth:
             logging.debug("  Target %s: Using no auth", self.target)
@@ -953,6 +954,7 @@ class RedfishIventoryCollector:
         remoteboard_macs = {}
         
         vendor = self._vendor or self._inventory.get('Manufacturer', '')
+        vendor = self._vendor_aliases.get(vendor.lower(), vendor) if vendor else vendor
         
         # Vendor-specific BMC NIC endpoints
         remoteboard_mapping = {
