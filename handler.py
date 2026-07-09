@@ -21,19 +21,62 @@ class WelcomePage:
     Create the Welcome page for the API.
     """
 
-    def on_get(self, resp):
+    def on_get(self, _req, resp):
         """
         Define the GET method for the API.
         """
         resp.status = falcon.HTTP_200
         resp.content_type = 'text/html'
-        resp.body = """
-        <h1>Inventory Updater</h1>
-        <h2>Redfish based Inventory to Netbox update tool.</h2>
-        <ul>
-            <li>Use <a href="/inventory">/inventory</a> to retrieve the inventory and update it in Netbox.</li>
-        </ul>
-        """
+        resp.text = """<!DOCTYPE html>
+<html>
+<head>
+  <title>Inventory Updater</title>
+  <style>
+    body { font-family: sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; }
+    code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 0.95em; }
+    pre  { background: #f4f4f4; padding: 12px; border-radius: 4px; overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { text-align: left; padding: 8px 12px; border: 1px solid #ddd; }
+    th { background: #f0f0f0; }
+  </style>
+</head>
+<body>
+  <h1>Inventory Updater</h1>
+  <p>Redfish-based inventory collection and Netbox update tool.</p>
+
+  <h2>Endpoints</h2>
+
+  <h3>GET /inventory</h3>
+  <p>Collects the hardware inventory of a server via Redfish and updates Netbox.</p>
+
+  <h4>Query Parameters</h4>
+  <table>
+    <tr><th>Parameter</th><th>Required</th><th>Description</th></tr>
+    <tr>
+      <td><code>target</code></td>
+      <td>Yes</td>
+      <td>
+        Hostname or IP address of the server to query.<br>
+        Hostname format: <code>nodeXXX-podXXX.&lt;suffix&gt;</code>
+        (e.g. <code>node001-abc123.cc.region1.cloud.sap</code>)<br>
+        IP address: a reverse DNS lookup is performed to resolve the hostname.
+      </td>
+    </tr>
+  </table>
+
+  <h4>Examples</h4>
+  <pre>GET /inventory?target=node001-abc123.cc.eu10.cloud.sap
+GET /inventory?target=10.0.0.1</pre>
+
+  <h4>Responses</h4>
+  <table>
+    <tr><th>Status</th><th>Meaning</th></tr>
+    <tr><td><code>200 OK</code></td><td>Inventory collected and Netbox updated successfully.</td></tr>
+    <tr><td><code>400 Bad Request</code></td><td>Missing or invalid <code>target</code> parameter.</td></tr>
+    <tr><td><code>500 Internal Server Error</code></td><td>Inventory collection or Netbox update failed.</td></tr>
+  </table>
+</body>
+</html>"""
 
 class HandlerException(Exception):
     """
@@ -101,14 +144,14 @@ class InventoryCollector:
             duration = round(time.time() - start_time, 2)
             resp.status = falcon.HTTP_200
             resp.content_type = 'text/html'
-            resp.body = (
+            resp.text = (
                 f"<p>Successfully pulled the inventory of target {target}."
                 f" Duration: {duration}s.</p>"
             )
         else:
             resp.status = falcon.HTTP_500
             resp.content_type = 'text/html'
-            resp.body = f"<p>Failed to pull the inventory of target {target}.</p>"
+            resp.text = f"<p>Failed to pull the inventory of target {target}.</p>"
 
     def process_single_server(self, server):
         """

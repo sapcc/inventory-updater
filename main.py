@@ -93,7 +93,7 @@ def falcon_app(config, connection):
     addr = "0.0.0.0"
     logging.info("Starting Redfish Prometheus Server on Port %s", port)
 
-    api = falcon.API()
+    api = falcon.App()
     api.add_route("/inventory", InventoryCollector(config, connection))
     api.add_route("/", WelcomePage())
 
