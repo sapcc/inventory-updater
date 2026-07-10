@@ -369,6 +369,9 @@ class RedfishIventoryCollector:
                         self._inventory['PowerState']
                     )
 
+        # Cache so _get_tpm_info can reuse the response without a second HTTP request.
+        self._system_info = server_info
+
         # get the links of the parts for later
 
         urls = (
@@ -935,9 +938,9 @@ class RedfishIventoryCollector:
         return nics
 
     def _get_tpm_info(self):
-
         logging.info("  Target %s: Get the TPM data.", self.target)
-        systeminfo = self.connect_server(self._urls['Systems'])
+        # Reuse the system info already fetched in _get_system_urls — no extra HTTP request.
+        systeminfo = getattr(self, '_system_info', None) or self.connect_server(self._urls['Systems'])
         tpm_modules = []
 
         if systeminfo and systeminfo.get('TrustedModules'):
