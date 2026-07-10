@@ -21,6 +21,11 @@ class NetboxConnection:
         self.region = os.getenv("REGION", config.get('region'))
         self.netbox_query = os.getenv("NETBOX_QUERY", config.get('netbox', {}).get('query'))
         self.manufacturer_aliases = config.get('manufacturer_aliases', {})
+        self.bmc_interface_names = {
+            re.sub(r'[-_ ]+', '', n).lower()
+            for n in config.get('bmc_interface_names',
+                ['remoteboard', 'iLO', 'iDRAC', 'XCC', 'iRMC', 'BMC', 'MGMT'])
+        }
 
         self.netbox_url = os.getenv("NETBOX_URL", config.get('netbox', {}).get('url'))
         self.netbox_inventory_items_url = f"{self.netbox_url}/api/dcim/inventory-items/"
@@ -512,30 +517,59 @@ class NetboxInventoryUpdater:
         def normalise(name):
             return re.sub(r'[-_ ]+', '', name).lower()
 
-        for interface in interfaces:
-            if normalise(interface['name']) == normalise(interface_name):
-                if interface.get('mac_address') == mac_address.upper():
-                    logging.info(
-                        "  Netbox %s: MAC already current for %s",
-                        self.device_name, interface_name
-                    )
-                    return
-                
-                try:
-                    url = f"{self.netbox_connection.netbox_url}/api/dcim/interfaces/{interface['id']}/"
-                    payload = json.dumps({"mac_address": mac_address.upper()})
-                    
-                    self.netbox_connection.send_request(url, 'PATCH', data=payload)
-                    logging.info(
-                        "  Netbox %s: Updated %s MAC to %s",
-                        self.device_name, interface_name, mac_address
-                    )
-                except Exception as err:
-                    logging.warning(
-                        "  Netbox %s: Failed to update MAC for %s: %s",
-                        self.device_name, interface_name, err
-                    )
+        _BMC_NAMES = self.netbox_connection.bmc_interface_names
+
+        def find_interface():
+            # Non-BMC keys: exact name match only.
+            if normalise(interface_name) not in _BMC_NAMES:
+                for iface in interfaces:
+                    if normalise(iface['name']) == normalise(interface_name):
+                        return iface
+                return None
+
+            # BMC key: mgmt_only flag is authoritative.
+            mgmt_interfaces = [i for i in interfaces if i.get('mgmt_only')]
+            if len(mgmt_interfaces) == 1:
+                return mgmt_interfaces[0]
+            if len(mgmt_interfaces) > 1:
+                logging.warning(
+                    "  Netbox %s: Multiple mgmt_only interfaces found, skipping remoteboard MAC update",
+                    self.device_name
+                )
+                return None
+
+            # No mgmt_only interface — fall back to known BMC name variants.
+            logging.warning(
+                "  Netbox %s: No interface marked mgmt_only, falling back to name matching for remoteboard MAC",
+                self.device_name
+            )
+            for iface in interfaces:
+                if normalise(iface['name']) in _BMC_NAMES:
+                    return iface
+            return None
+
+        interface = find_interface()
+        if interface:
+            if interface.get('mac_address') == mac_address.upper():
+                logging.info(
+                    "  Netbox %s: MAC already current for %s",
+                    self.device_name, interface['name']
+                )
                 return
+            try:
+                url = f"{self.netbox_connection.netbox_url}/api/dcim/interfaces/{interface['id']}/"
+                payload = json.dumps({"mac_address": mac_address.upper()})
+                self.netbox_connection.send_request(url, 'PATCH', data=payload)
+                logging.info(
+                    "  Netbox %s: Updated %s MAC to %s",
+                    self.device_name, interface['name'], mac_address
+                )
+            except Exception as err:
+                logging.warning(
+                    "  Netbox %s: Failed to update MAC for %s: %s",
+                    self.device_name, interface['name'], err
+                )
+            return
         
         logging.debug(
             "  Netbox %s: Interface %s not found in Netbox",
