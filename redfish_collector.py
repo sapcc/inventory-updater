@@ -840,6 +840,9 @@ class RedfishIventoryCollector:
                 self._urls['NetworkPorts'] = nic_ports_url['@odata.id']
                 ports = self._get_urls('NetworkPorts')
                 ports_info = self._get_info_from_urls(ports)
+                # Sort ports by MAC address alphabetically for deterministic port assignment
+                # regardless of API return order — matches original mac_serial_ng.py behaviour.
+                ports_info.sort(key=lambda p: p.get('MAC') or '')
                 nic['Ports'] = []
                 for port_info in ports_info:
                     nic['Ports'].append(self._get_port_info(port_info))
@@ -1021,13 +1024,40 @@ class RedfishIventoryCollector:
             'macs': {}
         }
         
-        # Collect MAC addresses from network adapters
+        # Collect MAC addresses from network adapters.
+        # Use StructuredName (e.g. "NIC.Slot.2.1", "NIC.LOM.1.1") for slot-aware,
+        # LOM/FlexLOM adapters map to LOM{n}_Port{p}; PCIe slots map to NIC{slot}_Port{p}.
+        # Falls back to enumeration order when StructuredName is absent (non-HPE vendors).
         if self._inventory.get('NetworkAdapters'):
-            for idx, adapter in enumerate(self._inventory['NetworkAdapters']):
-                for port_idx, port in enumerate(adapter.get('Ports', [])):
+            nic_counter = 0
+            for adapter in self._inventory['NetworkAdapters']:
+                structured = adapter.get('StructuredName', '')
+                ports = sorted(adapter.get('Ports', []), key=lambda p: p.get('MAC') or '')
+
+                if structured:
+                    # HPE StructuredName format: NIC.LOM.1.1 / NIC.FlexLOM.1.1 / NIC.Slot.2.1
+                    parts = structured.split('.')
+                    is_lom = len(parts) >= 2 and parts[1].upper() in ('LOM', 'FLEXLOM')
+                    try:
+                        slot_num = int(parts[2]) if len(parts) >= 3 else 1
+                    except ValueError:
+                        slot_num = 1
+                else:
+                    # Non-HPE: keep simple enumeration order
+                    if not ports:
+                        continue
+                    nic_counter += 1
+                    slot_num = nic_counter
+                    is_lom = False
+
+                for port_idx, port in enumerate(ports, start=1):
                     mac = port.get('MAC')
                     if mac:
-                        key = f"NIC{idx+1}_Port{port_idx+1}"
+                        if is_lom:
+                            # LOM ports map to L1, L2 — matching existing Netbox interface names
+                            key = f"L{port_idx}"
+                        else:
+                            key = f"NIC{slot_num}_Port{port_idx}"
                         mac_serial_data['macs'][key] = mac
         
         # Collect remoteboard MAC
@@ -1103,7 +1133,7 @@ class RedfishIventoryCollector:
             'NetworkAdapters', self._get_network_info, "NetworkAdapters",
             (
             'Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU',
-            'NetworkPorts', 'Ports'
+            'NetworkPorts', 'Ports', 'StructuredName'
             )
         )
 
