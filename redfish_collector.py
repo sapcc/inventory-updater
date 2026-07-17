@@ -381,12 +381,16 @@ class RedfishIventoryCollector:
             'Processors',
             'Storage',
             'SimpleStorage',
-            'BaseNetworkAdapters'
         )
 
         for url in urls:
             if url in server_info:
                 self._urls.update({url: server_info[url]['@odata.id']})
+
+        # HPE-specific: BaseNetworkAdapters is at a known path relative to the system URL.
+        # Only set when vendor is HPE — self._vendor comes from /redfish/v1 Vendor field.
+        if self._vendor == 'HPE':
+            self._urls['BaseNetworkAdapters'] = self._urls['Systems'] + '/BaseNetworkAdapters'
 
     def _get_chassis_urls(self):
         logging.debug("  Target %s: Get the Chassis URLs.", self.target)
@@ -999,6 +1003,98 @@ class RedfishIventoryCollector:
         
         return remoteboard_macs
 
+    def _mac_key_from_structured_name(self, structured, port_idx):
+        """Return the Netbox interface key for an HPE StructuredName + 1-based port index."""
+        parts = structured.split('.')
+        is_lom = len(parts) >= 2 and parts[1].upper() in ('LOM', 'FLEXLOM')
+        if is_lom:
+            return f"L{port_idx}"
+        try:
+            slot_num = int(parts[2]) if len(parts) >= 3 else 1
+        except ValueError:
+            slot_num = 1
+        return f"NIC{slot_num}_Port{port_idx}"
+
+    def _collect_macs_from_base_network_adapters(self, macs):
+        """HPE-specific: fetch BaseNetworkAdapters and extract MACs using StructuredName.
+
+        BaseNetworkAdapters is BMC-resident and available regardless of host power state.
+        Adapters are sorted by StructuredName for deterministic ordering; ports within
+        each adapter are sorted by MAC address (matching original mac_serial_ng.py).
+        """
+        adapter_urls = self._get_urls('BaseNetworkAdapters')
+        if not adapter_urls:
+            return
+
+        logging.info("  Target %s: Collecting MACs from BaseNetworkAdapters (%d adapters).",
+                     self.target, len(adapter_urls))
+
+        adapters = []
+        for url in adapter_urls:
+            data = self.connect_server(url)
+            if data:
+                adapters.append(data)
+
+        # Sort adapters by StructuredName so slot order is deterministic
+        adapters.sort(key=lambda a: a.get('StructuredName', ''))
+
+        nic_counter = 0
+        for adapter in adapters:
+            structured = adapter.get('StructuredName', '')
+            name = adapter.get('Name', 'unknown')
+            location = adapter.get('Location', 'unknown')
+            ports = sorted(adapter.get('PhysicalPorts', []),
+                           key=lambda p: p.get('MacAddress') or '')
+
+            if not ports:
+                logging.debug("  Target %s: Adapter %s (%s) has no PhysicalPorts, skipping.",
+                              self.target, name, location)
+                continue
+
+            logging.info("  Target %s: Adapter %s (%s) StructuredName=%s - %d port(s).",
+                         self.target, name, location, structured or 'none', len(ports))
+
+            if structured:
+                for port_idx, port in enumerate(ports, start=1):
+                    mac = port.get('MacAddress')
+                    if mac:
+                        key = self._mac_key_from_structured_name(structured, port_idx)
+                        logging.info("  Target %s:   %s = %s", self.target, key, mac)
+                        macs[key] = mac
+            else:
+                nic_counter += 1
+                for port_idx, port in enumerate(ports, start=1):
+                    mac = port.get('MacAddress')
+                    if mac:
+                        key = f"NIC{nic_counter}_Port{port_idx}"
+                        logging.info("  Target %s:   %s → %s (no StructuredName)",
+                                     self.target, key, mac)
+                        macs[key] = mac
+
+    def _collect_macs_from_network_adapters(self, macs):
+        """Non-HPE fallback: extract MACs from the NetworkAdapters already in inventory."""
+        logging.info("  Target %s: Collecting MACs from NetworkAdapters inventory (non-HPE fallback).",
+                     self.target)
+        nic_counter = 0
+        for adapter in self._inventory.get('NetworkAdapters', []):
+            structured = adapter.get('StructuredName', '')
+            ports = sorted(adapter.get('Ports', []), key=lambda p: p.get('MAC') or '')
+
+            if not ports:
+                continue
+
+            if structured:
+                for port_idx, port in enumerate(ports, start=1):
+                    mac = port.get('MAC')
+                    if mac:
+                        macs[self._mac_key_from_structured_name(structured, port_idx)] = mac
+            else:
+                nic_counter += 1
+                for port_idx, port in enumerate(ports, start=1):
+                    mac = port.get('MAC')
+                    if mac:
+                        macs[f"NIC{nic_counter}_Port{port_idx}"] = mac
+
     def get_mac_serial_data(self):
         """
         Return consolidated MAC address and serial number data.
@@ -1024,41 +1120,13 @@ class RedfishIventoryCollector:
             'macs': {}
         }
         
-        # Collect MAC addresses from network adapters.
-        # Use StructuredName (e.g. "NIC.Slot.2.1", "NIC.LOM.1.1") for slot-aware,
-        # LOM/FlexLOM adapters map to LOM{n}_Port{p}; PCIe slots map to NIC{slot}_Port{p}.
-        # Falls back to enumeration order when StructuredName is absent (non-HPE vendors).
-        if self._inventory.get('NetworkAdapters'):
-            nic_counter = 0
-            for adapter in self._inventory['NetworkAdapters']:
-                structured = adapter.get('StructuredName', '')
-                ports = sorted(adapter.get('Ports', []), key=lambda p: p.get('MAC') or '')
-
-                if structured:
-                    # HPE StructuredName format: NIC.LOM.1.1 / NIC.FlexLOM.1.1 / NIC.Slot.2.1
-                    parts = structured.split('.')
-                    is_lom = len(parts) >= 2 and parts[1].upper() in ('LOM', 'FLEXLOM')
-                    try:
-                        slot_num = int(parts[2]) if len(parts) >= 3 else 1
-                    except ValueError:
-                        slot_num = 1
-                else:
-                    # Non-HPE: keep simple enumeration order
-                    if not ports:
-                        continue
-                    nic_counter += 1
-                    slot_num = nic_counter
-                    is_lom = False
-
-                for port_idx, port in enumerate(ports, start=1):
-                    mac = port.get('MAC')
-                    if mac:
-                        if is_lom:
-                            # LOM ports map to L1, L2 — matching existing Netbox interface names
-                            key = f"L{port_idx}"
-                        else:
-                            key = f"NIC{slot_num}_Port{port_idx}"
-                        mac_serial_data['macs'][key] = mac
+        # For HPE, use BaseNetworkAdapters — BMC-resident, always available, has StructuredName
+        # and PhysicalPorts with MacAddress directly. For other vendors fall back to the
+        # NetworkAdapters inventory already collected by _get_network_info.
+        if self._urls.get('BaseNetworkAdapters'):
+            self._collect_macs_from_base_network_adapters(mac_serial_data['macs'])
+        elif self._inventory.get('NetworkAdapters'):
+            self._collect_macs_from_network_adapters(mac_serial_data['macs'])
         
         # Collect remoteboard MAC
         mac_serial_data['macs'].update(self._get_remoteboard_mac())
