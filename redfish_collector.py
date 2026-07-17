@@ -1003,17 +1003,17 @@ class RedfishIventoryCollector:
         
         return remoteboard_macs
 
-    def _mac_key_from_structured_name(self, structured, port_idx):
-        """Return the Netbox interface key for an HPE StructuredName + 1-based port index."""
+    def _mac_key_from_structured_name(self, structured, port_idx, nic_idx=None):
+        """Return the Netbox interface key for an HPE StructuredName + 1-based port index.
+
+        nic_idx is the sequential NIC counter (1, 2, ...) used for PCIe adapters so that
+        Netbox names stay NIC1, NIC2 regardless of physical slot gaps.
+        """
         parts = structured.split('.')
         is_lom = len(parts) >= 2 and parts[1].upper() in ('LOM', 'FLEXLOM')
         if is_lom:
             return f"L{port_idx}"
-        try:
-            slot_num = int(parts[2]) if len(parts) >= 3 else 1
-        except ValueError:
-            slot_num = 1
-        return f"NIC{slot_num}_Port{port_idx}"
+        return f"NIC{nic_idx}_Port{port_idx}"
 
     def _collect_macs_from_base_network_adapters(self, macs):
         """HPE-specific: fetch BaseNetworkAdapters and extract MACs using StructuredName.
@@ -1051,25 +1051,24 @@ class RedfishIventoryCollector:
                               self.target, name, location)
                 continue
 
+            # Determine if this is a LOM adapter; only PCIe adapters increment the counter
+            parts = structured.split('.') if structured else []
+            is_lom = len(parts) >= 2 and parts[1].upper() in ('LOM', 'FLEXLOM')
+            if not is_lom:
+                nic_counter += 1
+
             logging.info("  Target %s: Adapter %s (%s) StructuredName=%s - %d port(s).",
                          self.target, name, location, structured or 'none', len(ports))
 
-            if structured:
-                for port_idx, port in enumerate(ports, start=1):
-                    mac = port.get('MacAddress')
-                    if mac:
-                        key = self._mac_key_from_structured_name(structured, port_idx)
-                        logging.info("  Target %s:   %s = %s", self.target, key, mac)
-                        macs[key] = mac
-            else:
-                nic_counter += 1
-                for port_idx, port in enumerate(ports, start=1):
-                    mac = port.get('MacAddress')
-                    if mac:
+            for port_idx, port in enumerate(ports, start=1):
+                mac = port.get('MacAddress')
+                if mac:
+                    if structured:
+                        key = self._mac_key_from_structured_name(structured, port_idx, nic_counter)
+                    else:
                         key = f"NIC{nic_counter}_Port{port_idx}"
-                        logging.info("  Target %s:   %s → %s (no StructuredName)",
-                                     self.target, key, mac)
-                        macs[key] = mac
+                    logging.info("  Target %s:   %s = %s", self.target, key, mac)
+                    macs[key] = mac
 
     def _collect_macs_from_network_adapters(self, macs):
         """Non-HPE fallback: extract MACs from the NetworkAdapters already in inventory."""
