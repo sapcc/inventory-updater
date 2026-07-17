@@ -1062,7 +1062,7 @@ class RedfishIventoryCollector:
         
         # Collect remoteboard MAC
         mac_serial_data['macs'].update(self._get_remoteboard_mac())
-        
+
         return mac_serial_data
 
     def _collect_component_data(self, component, method, component_name, fields=None):
