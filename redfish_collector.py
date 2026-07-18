@@ -1064,7 +1064,7 @@ class RedfishIventoryCollector:
             if not is_lom:
                 nic_counter += 1
 
-            logging.info("  Target %s: Adapter %s (%s) StructuredName=%s - %d port(s).",
+            logging.debug("  Target %s: Adapter %s (%s) StructuredName=%s - %d port(s).",
                          self.target, name, location, structured or 'none', len(ports))
 
             for port_idx, port in enumerate(ports, start=1):
@@ -1074,7 +1074,7 @@ class RedfishIventoryCollector:
                         key = self._mac_key_from_structured_name(structured, port_idx, nic_counter)
                     else:
                         key = f"NIC{nic_counter}_Port{port_idx}"
-                    logging.info("  Target %s:   %s = %s", self.target, key, mac)
+                    logging.debug("  Target %s:   %s = %s", self.target, key, mac)
                     macs[key] = mac
 
         return True
@@ -1123,7 +1123,7 @@ class RedfishIventoryCollector:
                             key = self._mac_key_from_structured_name(structured, port_idx, nic_counter)
                         else:
                             key = f"NIC{nic_counter}_Port{port_idx}"
-                        logging.info("  Target %s:   %s = %s", self.target, key, mac)
+                        logging.debug("  Target %s:   %s = %s", self.target, key, mac)
                         macs[key] = mac
                 continue
 
@@ -1143,7 +1143,7 @@ class RedfishIventoryCollector:
                         key = self._mac_key_from_structured_name(structured, port_idx, nic_counter)
                     else:
                         key = f"NIC{nic_counter}_Port{port_idx}"
-                    logging.info("  Target %s:   %s = %s", self.target, key, mac)
+                    logging.debug("  Target %s:   %s = %s", self.target, key, mac)
                     macs[key] = mac
 
     def get_mac_serial_data(self):
