@@ -168,7 +168,7 @@ class InventoryCollector:
         logging.info("==> Server %s", server)
 
         server_collector = None
-        server_pattern = re.compile(r"^([a-z]+\d{2,3})-([a-z]{2,3}\d{3})(\..+)$")
+        server_pattern = re.compile(r"^([a-z]+\d{2,3})-([a-z]{2,3}\d{3})(?:-[a-z]+\d+)?(\..+)$")
 
         matches = re.match(server_pattern, server)
 
