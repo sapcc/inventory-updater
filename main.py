@@ -158,7 +158,7 @@ def get_serverlist(config, connection):
         logging.info("==> Retrieving server list from file %s", config['servers'])
         try:
             with open(config['servers'], 'rt', encoding="utf8") as f:
-                serverlist = f.readlines()
+                serverlist = [line for line in f.readlines() if line.strip()]
         except FileNotFoundError as err:
             logging.error("Serverlist File not found: %s", err)
             sys.exit(1)
@@ -214,8 +214,13 @@ def run_inventory_loop(config, connection):
             sleep_time = max(0, scrape_interval - elapsed)
 
             def fmt(seconds):
-                h, m = divmod(int(seconds) // 60, 60)
-                return f"{h}h {m:02d}m"
+                m, s = divmod(int(seconds), 60)
+                h, m = divmod(m, 60)
+                if h > 0:
+                    return f"{h}h {m:02d}m"
+                if m > 0:
+                    return f"{m}m {s:02d}s"
+                return f"{s}s"
 
             if sleep_time > 0:
                 logging.info("==> Round finished in %s. Sleeping for %s.", fmt(elapsed), fmt(sleep_time))
