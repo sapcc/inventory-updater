@@ -527,25 +527,37 @@ class NetboxInventoryUpdater:
                         return iface
                 return None
 
-            # BMC key: mgmt_only flag is authoritative.
+            # BMC key: name match is the most reliable indicator.
+            named = [i for i in interfaces if normalise(i['name']) in _BMC_NAMES]
+            if len(named) == 1:
+                return named[0]
+            if len(named) > 1:
+                # Multiple name matches — also require mgmt_only to narrow down
+                named_mgmt = [i for i in named if i.get('mgmt_only')]
+                if len(named_mgmt) == 1:
+                    return named_mgmt[0]
+
+            # Fall back to mgmt_only flag when name matching is inconclusive.
             mgmt_interfaces = [i for i in interfaces if i.get('mgmt_only')]
             if len(mgmt_interfaces) == 1:
                 return mgmt_interfaces[0]
             if len(mgmt_interfaces) > 1:
+                # Multiple mgmt_only — try name match as tiebreaker.
+                named_mgmt = [i for i in mgmt_interfaces if normalise(i['name']) in _BMC_NAMES]
+                if len(named_mgmt) == 1:
+                    return named_mgmt[0]
                 logging.warning(
-                    "  Netbox %s: Multiple mgmt_only interfaces found, skipping remoteboard MAC update",
+                    "  Netbox %s: Multiple mgmt_only interfaces found and names are ambiguous, "
+                    "skipping remoteboard MAC update",
                     self.device_name
                 )
                 return None
 
-            # No mgmt_only interface — fall back to known BMC name variants.
+            # No mgmt_only at all — already handled name match above, nothing found.
             logging.warning(
-                "  Netbox %s: No interface marked mgmt_only, falling back to name matching for remoteboard MAC",
+                "  Netbox %s: No interface marked mgmt_only and no known BMC name found",
                 self.device_name
             )
-            for iface in interfaces:
-                if normalise(iface['name']) in _BMC_NAMES:
-                    return iface
             return None
 
         interface = find_interface()
