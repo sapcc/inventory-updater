@@ -1007,7 +1007,12 @@ class RedfishIventoryCollector:
         Netbox names stay NIC1, NIC2 regardless of physical slot gaps.
         """
         parts = structured.split('.')
-        is_lom = len(parts) >= 2 and parts[1].upper() in ('LOM', 'FLEXLOM')
+        # NIC.FlexLOM / NIC.LOM  → L{port}
+        # OCP.Slot / OCP.LOM     → L{port}  (Gen12 OCP embedded NIC)
+        is_lom = (
+            (len(parts) >= 2 and parts[1].upper() in ('LOM', 'FLEXLOM')) or
+            parts[0].upper() == 'OCP'
+        )
         if is_lom:
             return f"L{port_idx}"
         return f"NIC{nic_idx}_Port{port_idx}"
@@ -1021,7 +1026,7 @@ class RedfishIventoryCollector:
         """
         adapter_urls = self._get_urls('BaseNetworkAdapters')
         if not adapter_urls:
-            return
+            return False
 
         logging.info("  Target %s: Collecting MACs from BaseNetworkAdapters (%d adapters).",
                      self.target, len(adapter_urls))
@@ -1031,6 +1036,11 @@ class RedfishIventoryCollector:
             data = self.connect_server(url)
             if data:
                 adapters.append(data)
+
+        if not adapters:
+            logging.warning("  Target %s: BaseNetworkAdapters returned no data, falling back to NetworkAdapters.",
+                            self.target)
+            return False
 
         # Sort adapters by StructuredName so slot order is deterministic
         adapters.sort(key=lambda a: a.get('StructuredName', ''))
@@ -1067,29 +1077,74 @@ class RedfishIventoryCollector:
                     logging.info("  Target %s:   %s = %s", self.target, key, mac)
                     macs[key] = mac
 
-    def _collect_macs_from_network_adapters(self, macs):
-        """Non-HPE fallback: extract MACs from the NetworkAdapters already in inventory."""
-        logging.info("  Target %s: Collecting MACs from NetworkAdapters inventory (non-HPE fallback).",
-                     self.target)
-        nic_counter = 0
-        for adapter in self._inventory.get('NetworkAdapters', []):
-            structured = adapter.get('StructuredName', '')
-            ports = sorted(adapter.get('Ports', []), key=lambda p: p.get('MAC') or '')
+        return True
 
-            if not ports:
+    def _collect_macs_from_network_adapters(self, macs):
+        """Fallback MAC collection from Chassis/NetworkAdapters.
+
+        Used when BaseNetworkAdapters is unavailable (HPE Gen12+) or for non-HPE vendors.
+        Re-fetches each adapter without $select so Oem.Hpe fields are available, which
+        carry both StructuredName and PhysicalPorts with MacAddress on Gen12 iLOs.
+        """
+        logging.info("  Target %s: Collecting MACs from NetworkAdapters.", self.target)
+
+        # Collect adapter URLs from inventory (stored as @odata.id in the Ports/NetworkPorts links)
+        # Fall back to re-fetching the collection directly.
+        adapter_urls = self._get_urls('NetworkAdapters')
+        if not adapter_urls:
+            return
+
+        nic_counter = 0
+        for url in sorted(adapter_urls):
+            data = self.connect_server(url)
+            if not data:
                 continue
 
-            if structured:
-                for port_idx, port in enumerate(ports, start=1):
-                    mac = port.get('MAC')
-                    if mac:
-                        macs[self._mac_key_from_structured_name(structured, port_idx)] = mac
-            else:
+            # Gen12 iLO: StructuredName and MACs live under Oem.Hpe
+            hpe_oem = data.get('Oem', {}).get('Hpe', {})
+            structured = hpe_oem.get('StructuredName') or data.get('StructuredName', '')
+
+            parts = structured.split('.') if structured else []
+            is_lom = (
+                (len(parts) >= 2 and parts[1].upper() in ('LOM', 'FLEXLOM')) or
+                (parts[0].upper() == 'OCP' if parts else False)
+            )
+            if not is_lom:
                 nic_counter += 1
-                for port_idx, port in enumerate(ports, start=1):
-                    mac = port.get('MAC')
+
+            # Gen12: MACs in Oem.Hpe.PhysicalPorts
+            hpe_ports = hpe_oem.get('PhysicalPorts', [])
+            if hpe_ports:
+                sorted_ports = sorted(hpe_ports, key=lambda p: p.get('MacAddress') or '')
+                for port_idx, port in enumerate(sorted_ports, start=1):
+                    mac = port.get('MacAddress')
                     if mac:
-                        macs[f"NIC{nic_counter}_Port{port_idx}"] = mac
+                        if structured:
+                            key = self._mac_key_from_structured_name(structured, port_idx, nic_counter)
+                        else:
+                            key = f"NIC{nic_counter}_Port{port_idx}"
+                        logging.info("  Target %s:   %s = %s", self.target, key, mac)
+                        macs[key] = mac
+                continue
+
+            # Non-HPE or older iLO: MACs already in inventory Ports
+            inv_adapter = next(
+                (a for a in self._inventory.get('NetworkAdapters', [])
+                 if a.get('@odata.id') == url or url.endswith(f"/{a.get('Id', '')}")),
+                None
+            )
+            if not inv_adapter:
+                continue
+            ports = sorted(inv_adapter.get('Ports', []), key=lambda p: p.get('MAC') or '')
+            for port_idx, port in enumerate(ports, start=1):
+                mac = port.get('MAC')
+                if mac:
+                    if structured:
+                        key = self._mac_key_from_structured_name(structured, port_idx, nic_counter)
+                    else:
+                        key = f"NIC{nic_counter}_Port{port_idx}"
+                    logging.info("  Target %s:   %s = %s", self.target, key, mac)
+                    macs[key] = mac
 
     def get_mac_serial_data(self):
         """
@@ -1117,11 +1172,14 @@ class RedfishIventoryCollector:
         }
         
         # For HPE, use BaseNetworkAdapters — BMC-resident, always available, has StructuredName
-        # and PhysicalPorts with MacAddress directly. For other vendors fall back to the
-        # NetworkAdapters inventory already collected by _get_network_info.
+        # and PhysicalPorts with MacAddress directly. Falls back to NetworkAdapters if the
+        # endpoint is absent (newer iLO generations dropped BaseNetworkAdapters).
         if self._urls.get('BaseNetworkAdapters'):
-            self._collect_macs_from_base_network_adapters(mac_serial_data['macs'])
-        elif self._inventory.get('NetworkAdapters'):
+            collected = self._collect_macs_from_base_network_adapters(mac_serial_data['macs'])
+        else:
+            collected = False
+
+        if not collected and self._inventory.get('NetworkAdapters'):
             self._collect_macs_from_network_adapters(mac_serial_data['macs'])
         
         # Collect remoteboard MAC
