@@ -556,7 +556,7 @@ class RedfishIventoryCollector:
             if not dimm_info:
                 continue
 
-            ram_rounded = round(self._inventory['MemorySummary']['TotalSystemMemoryGiB'])
+            ram_rounded = round(self._inventory['MemorySummary'].get('TotalSystemMemoryGiB') or 0)
             dimm_info['NetboxName'] = f"RAM {ram_rounded}GB"
 
             # HPE has the DIMM Manufacturer in the OEM data
@@ -691,16 +691,13 @@ class RedfishIventoryCollector:
                 drive['PartNumber'] = drive['Model']
 
             if (drive['CapacityBytes'] or 0) > 0:
+                capacity_gb = round((drive['CapacityBytes'] or 0) / 1024 / 1024 / 1024)
                 if (drive['Protocol'] in ["PCIe", "NVMe"] and
                         drive['MediaType'] == "SSD") or "NVMe" in drive['Name']:
-                    drive['NetboxName'] = (
-                        f"NVMe {round(drive['CapacityBytes']/1024/1024/1024)}GB"
-                    )
+                    drive['NetboxName'] = f"NVMe {capacity_gb}GB"
                 elif (drive['Protocol'] in ["SATA", "SAS", None] and
                     drive['MediaType'] in ["SSD", "HDD"]):
-                    drive['NetboxName'] = (
-                        f"{drive['MediaType']} {round(drive['CapacityBytes']/1024/1024/1024)}GB"
-                    )
+                    drive['NetboxName'] = f"{drive['MediaType']} {capacity_gb}GB"
                     # Supermicro is missing the Protocol for SSDs
                     drive['Protocol'] = getattr(drive, 'Protocol', 'SATA')
                 else:
@@ -1112,8 +1109,8 @@ class RedfishIventoryCollector:
             'manufacturer': self._inventory.get('Manufacturer', ''),
             'model': self._inventory.get('Model', ''),
             'memory_gb': round(
-                self._inventory.get('MemorySummary', {})
-                .get('TotalSystemMemoryGiB', 0) * 1.073741824
+                (self._inventory.get('MemorySummary', {})
+                .get('TotalSystemMemoryGiB') or 0) * 1.073741824
             ),
             'health': self._inventory.get('Status', {}).get('Health', 'Unknown'),
             'macs': {}
