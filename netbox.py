@@ -6,6 +6,7 @@ import os
 import re
 import json
 import sys
+from collections import defaultdict
 import requests
 
 class NetboxConnectionException(Exception):
@@ -360,21 +361,34 @@ class NetboxInventoryUpdater:
 
     def _update_inventory_items(self, netbox_device_id, server_inventory, netbox_inventory):
         """
-        Update iventory items in Netbox
+        Update inventory items in Netbox.
+
+        Matching strategy:
+        1. Serial number match (when both sides have a non-empty serial) — stable across
+           API return order changes.
+        2. Positional match within the same NetboxName group — preserves existing behaviour
+           for components with no serial, while preventing cross-type swaps (CPUs vs NICs).
         """
 
-        counter = 0
-        for item in server_inventory:
-            current_netbox_item = []
-            try:
-                current_netbox_item = netbox_inventory[counter]
-            except IndexError:
-                pass
+        # Build a lookup of unmatched Netbox items by serial for fast serial matching.
+        netbox_by_serial = {}
+        for nb_item in netbox_inventory:
+            s = (nb_item.get('serial') or '').strip()
+            if s:
+                netbox_by_serial[s] = nb_item
 
-            # Dell has the real name in the Model, others have it in the Name
+        # Track which Netbox items have already been matched to avoid double-use.
+        matched_netbox_ids = set()
+
+        # For positional fallback: group Netbox items by name.
+        netbox_by_name = defaultdict(list)
+        for nb_item in netbox_inventory:
+            netbox_by_name[nb_item.get('name', '')].append(nb_item)
+
+        for item in server_inventory:
             description = item.get('Description', None)
             if description is None:
-                if item.get('Name') in ['Network Adapter View','Adapter']:
+                if item.get('Name') in ['Network Adapter View', 'Adapter']:
                     description = item.get('Model', "")
                 else:
                     description = item.get('Name', "")
@@ -382,15 +396,36 @@ class NetboxInventoryUpdater:
             new_netbox_item = {
                 'manufacturer': self.get_manufacturer_id(item['Manufacturer'], item.get('NetboxName')),
                 'description': description,
-                'name': item.get('NetboxName',""),
+                'name': item.get('NetboxName', ""),
                 'device': netbox_device_id,
                 'part_id': item.get('PartNumber', item.get('Model', "")),
                 'serial': item.get('SerialNumber', "")
             }
-            old_netbox_item_json = json.dumps(self._convert_netbox_inventory(current_netbox_item))
+
+            server_serial = (new_netbox_item['serial'] or '').strip()
+            current_netbox_item = None
+
+            # 1. Try serial match.
+            if server_serial and server_serial in netbox_by_serial:
+                candidate = netbox_by_serial[server_serial]
+                if candidate['id'] not in matched_netbox_ids:
+                    current_netbox_item = candidate
+
+            # 2. Positional fallback within same name group.
+            if current_netbox_item is None:
+                candidates = [
+                    nb for nb in netbox_by_name.get(new_netbox_item['name'], [])
+                    if nb['id'] not in matched_netbox_ids
+                ]
+                if candidates:
+                    current_netbox_item = candidates[0]
+
+            if current_netbox_item is not None:
+                matched_netbox_ids.add(current_netbox_item['id'])
+
+            old_netbox_item_json = json.dumps(self._convert_netbox_inventory(current_netbox_item or []))
             new_netbox_item_json = json.dumps(new_netbox_item).replace("null", '""')
 
-            # if no_change:
             if new_netbox_item_json == old_netbox_item_json:
                 logging.info(
                     "  Netbox %s: No change for %s",
@@ -413,7 +448,7 @@ class NetboxInventoryUpdater:
                             'new': item.get('Manufacturer', new.get('manufacturer'))
                         }
                     logging.info(
-                        "  Netbox %s: Updating item %s — changed: %s",
+                        "  Netbox %s: Updating item %s - changed: %s",
                         self.device_name,
                         new_netbox_item['name'],
                         changed_fields
@@ -426,8 +461,6 @@ class NetboxInventoryUpdater:
                         new_netbox_item['name']
                     )
                     self.add_inventory_item(new_netbox_item_json)
-
-            counter += 1
 
     def update_device_inventory_and_mac_serial(self, inventory):
         """
