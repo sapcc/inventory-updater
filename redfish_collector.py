@@ -165,7 +165,7 @@ class RedfishIventoryCollector:
                 )
 
 
-    def connect_server(self, command, noauth = False, basic_auth = False, fields = None):
+    def connect_server(self, command, noauth = False, basic_auth = False, fields = None, not_found_ok = False):
         """
         connect to the server and get the data
         """
@@ -230,13 +230,17 @@ class RedfishIventoryCollector:
                 )
 
         except requests.exceptions.RequestException as err:
-            if err.response:
-                logging.error(
-                    "  Target %s: Unable to connect to %s: Status Code %s",
-                    self.target,
-                    err.response.url,
-                    err.response.status_code
-                )
+            if err.response is not None:
+                if not_found_ok and err.response.status_code == 404:
+                    logging.debug(
+                        "  Target %s: Resource not found (404): %s",
+                        self.target, err.response.url
+                    )
+                else:
+                    logging.error(
+                        "  Target %s: Unable to connect to %s: Status Code %s",
+                        self.target, err.response.url, err.response.status_code
+                    )
             else:
                 logging.error("  Target %s: Unable to connect to URL %s", self.target, url)
 
@@ -438,7 +442,7 @@ class RedfishIventoryCollector:
                         chassi_info['Name']
                     )
 
-    def _get_urls(self, url):
+    def _get_urls(self, url, not_found_ok=False):
         urls= []
         logging.debug("  Target %s: Get the %s URLs.", self.target, url)
         if isinstance(self._urls[url], list):
@@ -447,7 +451,7 @@ class RedfishIventoryCollector:
             device_urls = [self._urls[url]]
 
         for device_url in device_urls:
-            collection = self.connect_server(device_url)
+            collection = self.connect_server(device_url, not_found_ok=not_found_ok)
             if collection and collection.get('Members'):
                 for member in collection['Members']:
                     urls.append(member['@odata.id'])
@@ -1030,7 +1034,7 @@ class RedfishIventoryCollector:
         Adapters are sorted by StructuredName for deterministic ordering; ports within
         each adapter are sorted by MAC address (matching original mac_serial_ng.py).
         """
-        adapter_urls = self._get_urls('BaseNetworkAdapters')
+        adapter_urls = self._get_urls('BaseNetworkAdapters', not_found_ok=True)
         if not adapter_urls:
             return False
 
