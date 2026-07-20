@@ -632,16 +632,18 @@ class RedfishIventoryCollector:
             else:
                 port['MAC'] = macs
 
-        if 'SupportedLinkCapabilities' not in port_info and 'CurrentSpeedGbps' not in port_info:
+        if ('SupportedLinkCapabilities' not in port_info and
+                'CurrentSpeedGbps' not in port_info and
+                'MaxSpeedGbps' not in port_info):
             logging.warning(
-                "  Target %s: No CurrentSpeedGbps and SupportedLinkCapabilities found for Port %s!",
+                "  Target %s: No speed information found for Port %s!",
                 self.target,
                 port_info['@odata.id']
             )
             return port
 
         current_port_speed_gbps = 0
-        if 'CurrentSpeedGbps' in port_info:
+        if 'CurrentSpeedGbps' in port_info or 'MaxSpeedGbps' in port_info:
             current_port_speed_gbps = (
                 port_info.get('CurrentSpeedGbps') or
                 port_info.get('MaxSpeedGbps') or
@@ -670,9 +672,9 @@ class RedfishIventoryCollector:
             # Even though the name is CapableLinkSpeedMbps,
             # the speed is sometimes in bits/second (seen on HPE Gen11)
             if speed > 1048576:
-                current_port_speed_gbps = round(speed / 1024 / 1024 / 1024)
+                current_port_speed_gbps = int(round(speed / 1024 / 1024 / 1024))
             else:
-                current_port_speed_gbps = round(speed / 1000)
+                current_port_speed_gbps = int(round(speed / 1000))
         port['PortSpeed'] = current_port_speed_gbps
 
         return port
@@ -831,6 +833,10 @@ class RedfishIventoryCollector:
             self._get_network_info_from_ethernet_interfaces()
             return
 
+        # Cache individual adapter URLs so _collect_macs_from_network_adapters
+        # can reuse them without re-fetching the collection.
+        self._urls['NetworkAdapterUrls'] = nic_urls
+
         network_cards = self._get_info_from_urls(nic_urls, fields)
         network_cards_updated = []
         for nic in network_cards:
@@ -850,7 +856,7 @@ class RedfishIventoryCollector:
 
                 port_speed_gbps = max(((port.get('PortSpeed') or 0) for port in nic['Ports']), default=0)
 
-            nic['NetboxName'] = f"NIC {port_speed_gbps}Gb" if port_speed_gbps else "NIC"
+            nic['NetboxName'] = f"NIC {int(port_speed_gbps)}Gb" if port_speed_gbps else "NIC"
             nic.pop('NetworkPorts')
             network_cards_updated.append(nic)
 
@@ -885,7 +891,7 @@ class RedfishIventoryCollector:
             if not iface:
                 continue
             speed_mbps = iface.get('SpeedMbps') or 0
-            speed_gbps = round(speed_mbps / 1000) if speed_mbps else 0
+            speed_gbps = int(round(speed_mbps / 1000)) if speed_mbps else 0
             nics.append({
                 'Name': iface.get('Name') or iface.get('Id', ''),
                 'Manufacturer': iface.get('Manufacturer') or self._inventory.get('Manufacturer', ''),
@@ -893,7 +899,7 @@ class RedfishIventoryCollector:
                 'SerialNumber': iface.get('SerialNumber', ''),
                 'PartNumber': iface.get('PartNumber', ''),
                 'SKU': iface.get('SKU', ''),
-                'NetboxName': f"NIC {speed_gbps}Gb" if speed_gbps else "NIC",
+                'NetboxName': f"NIC {int(speed_gbps)}Gb" if speed_gbps else "NIC",
             })
         return nics
 
@@ -1090,7 +1096,7 @@ class RedfishIventoryCollector:
 
         # Collect adapter URLs from inventory (stored as @odata.id in the Ports/NetworkPorts links)
         # Fall back to re-fetching the collection directly.
-        adapter_urls = self._get_urls('NetworkAdapters')
+        adapter_urls = self._urls.get('NetworkAdapterUrls') or self._get_urls('NetworkAdapters')
         if not adapter_urls:
             return
 
