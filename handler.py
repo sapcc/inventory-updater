@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import traceback
+import json
 import falcon
 import requests
 
@@ -125,9 +126,13 @@ class InventoryCollector:
                 if host:
                     server_pattern = re.compile(r"^([a-z]+\d{2,3})r-([a-z]{2,3}\d{3})(\..+)$")
                     matches = re.match(server_pattern, host)
-                    node, pod, suffix = matches.groups()
-                    target = node + "-" + pod + suffix
-                    logging.info("Target %s: DNS lookup successful.", target)
+                    if matches:
+                        node, pod, suffix = matches.groups()
+                        target = node + "-" + pod + suffix
+                        logging.info("Target %s: DNS lookup successful.", target)
+                    else:
+                        logging.warning("Target %s: Reverse DNS hostname %s does not match naming convention.",
+                                        target, host)
             except socket.herror as err:
                 msg = f"Target {target}: Reverse DNS lookup failed: {err}"
                 logging.error(msg)
@@ -138,20 +143,18 @@ class InventoryCollector:
             result = self.process_single_server(target)
         except HandlerException as exc:
             logging.error("A Handler Exception occured: %s", traceback.format_exc())
-            raise falcon.HTTPBadRequest("Bad Request", traceback.format_exc()) from exc
+            raise falcon.HTTPBadRequest(description=str(exc)) from exc
 
+        duration = round(time.time() - start_time, 2)
         if result == 0:
-            duration = round(time.time() - start_time, 2)
             resp.status = falcon.HTTP_200
-            resp.content_type = 'text/html'
-            resp.text = (
-                f"<p>Successfully pulled the inventory of target {target}."
-                f" Duration: {duration}s.</p>"
-            )
+            resp.content_type = 'application/json'
+            resp.text = json.dumps({"status": "ok", "target": target, "duration_s": duration})
         else:
             resp.status = falcon.HTTP_500
-            resp.content_type = 'text/html'
-            resp.text = f"<p>Failed to pull the inventory of target {target}.</p>"
+            resp.content_type = 'application/json'
+            resp.text = json.dumps({"status": "error", "target": target,
+                                    "message": "Failed to collect inventory. Check logs for details."})
 
     def process_single_server(self, server):
         """
@@ -168,12 +171,13 @@ class InventoryCollector:
         logging.info("==> Server %s", server)
 
         server_collector = None
-        server_pattern = re.compile(r"^([a-z]+\d{2,3})-([a-z]{2,3}\d{3})(?:-[a-z]+\d+)?(\..+)$")
+        server_pattern = re.compile(r"^([a-z]+\d{1,3})-([a-z]{2,3}\d{3})(?:-[a-z]+\d+)?(\..+)$")
 
         matches = re.match(server_pattern, server)
 
         if not matches:
-            raise HandlerException(f"  Server {server}: Not matching the naming convention!")
+            logging.warning("  Server %s: Not matching the naming convention, skipping.", server)
+            return 1
 
         node, pod, suffix = matches.groups()
 
@@ -197,12 +201,13 @@ class InventoryCollector:
 
         try:
             server_collector = RedfishIventoryCollector(
-                timeout        = int(os.getenv('CONNECTION_TIMEOUT',
+                timeout           = int(os.getenv('CONNECTION_TIMEOUT',
                                                self.config.get('connection_timeout', 30))),
-                target         = bmc,
-                usr            = self.usr,
-                pwd            = self.pwd,
-                vendor_aliases = self.netbox_connection.manufacturer_aliases
+                target            = bmc,
+                usr               = self.usr,
+                pwd               = self.pwd,
+                vendor_aliases    = self.netbox_connection.manufacturer_aliases,
+                lom_manufacturers = self.netbox_connection.lom_manufacturers
             )
             server_collector.get_session()
 
