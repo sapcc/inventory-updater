@@ -27,6 +27,11 @@ class NetboxConnection:
             for n in config.get('bmc_interface_names',
                 ['remoteboard', 'iLO', 'iDRAC', 'XCC', 'iRMC', 'BMC', 'MGMT'])
         }
+        # Manufacturers whose NICs map to L-type interfaces (L1, L2, ...) rather than NIC1, NIC2.
+        # Typically onboard/management NICs (Intel I350, Broadcom BCM5719 OCP).
+        self.lom_manufacturers = {
+            m.lower() for m in config.get('lom_manufacturers', [])
+        }
 
         self.netbox_url = os.getenv("NETBOX_URL", config.get('netbox', {}).get('url'))
         self.netbox_inventory_items_url = f"{self.netbox_url}/api/dcim/inventory-items/"
@@ -592,6 +597,10 @@ class NetboxInventoryUpdater:
                 self.device_name
             )
             return None
+
+        # Normalise to upper-case colon-separated AA:BB:CC:DD:EE:FF.
+        clean = mac_address.upper().replace(':', '').replace('-', '')
+        mac_address = ':'.join(clean[i:i+2] for i in range(0, 12, 2))
 
         interface = find_interface()
         if interface:

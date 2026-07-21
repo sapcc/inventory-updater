@@ -16,7 +16,7 @@ class RedfishIventoryCollector:
     collects the inventory from a server using Redfish
     """
 
-    def __init__(self, timeout, target, usr, pwd, vendor_aliases=None):
+    def __init__(self, timeout, target, usr, pwd, vendor_aliases=None, lom_manufacturers=None):
 
         self.target = target
         self.ip_address = self.get_bmc_ip_address(target)
@@ -24,6 +24,7 @@ class RedfishIventoryCollector:
         self._username = usr
         self._password = pwd
         self._vendor_aliases = {k.lower(): v for k, v in (vendor_aliases or {}).items()}
+        self._lom_manufacturers = {m.lower() for m in (lom_manufacturers or [])}
 
         self.timeout = timeout
         self._response_time = 0
@@ -1095,17 +1096,16 @@ class RedfishIventoryCollector:
         Used when BaseNetworkAdapters is unavailable (HPE Gen12+) or for non-HPE vendors.
         Re-fetches each adapter without $select so Oem.Hpe fields are available, which
         carry both StructuredName and PhysicalPorts with MacAddress on Gen12 iLOs.
+        Falls back to MACs already collected in inventory Ports for non-HPE vendors.
         """
         logging.info("  Target %s: Collecting MACs from NetworkAdapters.", self.target)
 
-        # Collect adapter URLs from inventory (stored as @odata.id in the Ports/NetworkPorts links)
-        # Fall back to re-fetching the collection directly.
         adapter_urls = self._urls.get('NetworkAdapterUrls') or self._get_urls('NetworkAdapters')
         if not adapter_urls:
             return
 
         nic_counter = 0
-        for url in sorted(adapter_urls):
+        for url_idx, url in enumerate(sorted(adapter_urls)):
             data = self.connect_server(url)
             if not data:
                 continue
@@ -1113,11 +1113,13 @@ class RedfishIventoryCollector:
             # Gen12 iLO: StructuredName and MACs live under Oem.Hpe
             hpe_oem = data.get('Oem', {}).get('Hpe', {})
             structured = hpe_oem.get('StructuredName') or data.get('StructuredName', '')
+            manufacturer = (data.get('Manufacturer') or '').lower()
 
             parts = structured.split('.') if structured else []
             is_lom = (
                 (len(parts) >= 2 and parts[1].upper() in ('LOM', 'FLEXLOM')) or
-                (parts[0].upper() == 'OCP' if parts else False)
+                (parts[0].upper() == 'OCP' if parts else False) or
+                (not structured and manufacturer in self._lom_manufacturers)
             )
             if not is_lom:
                 nic_counter += 1
@@ -1137,12 +1139,10 @@ class RedfishIventoryCollector:
                         macs[key] = mac
                 continue
 
-            # Non-HPE or older iLO: MACs already in inventory Ports
-            inv_adapter = next(
-                (a for a in self._inventory.get('NetworkAdapters', [])
-                 if a.get('@odata.id') == url or url.endswith(f"/{a.get('Id', '')}")),
-                None
-            )
+            # Non-HPE or older iLO: MACs already in inventory Ports (populated by _get_network_info).
+            # Match by position in the sorted URL list since $select strips @odata.id and Id.
+            inv_adapters = self._inventory.get('NetworkAdapters', [])
+            inv_adapter = inv_adapters[url_idx] if url_idx < len(inv_adapters) else None
             if not inv_adapter:
                 continue
             ports = sorted(inv_adapter.get('Ports', []), key=lambda p: p.get('MAC') or '')
