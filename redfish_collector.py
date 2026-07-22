@@ -1151,6 +1151,8 @@ class RedfishIventoryCollector:
                 if mac:
                     if structured:
                         key = self._mac_key_from_structured_name(structured, port_idx, nic_counter)
+                    elif is_lom:
+                        key = f"L{port_idx}"
                     else:
                         key = f"NIC{nic_counter}_Port{port_idx}"
                     logging.debug("  Target %s:   %s = %s", self.target, key, mac)
