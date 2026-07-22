@@ -1114,12 +1114,15 @@ class RedfishIventoryCollector:
             hpe_oem = data.get('Oem', {}).get('Hpe', {})
             structured = hpe_oem.get('StructuredName') or data.get('StructuredName', '')
             manufacturer = (data.get('Manufacturer') or '').lower()
+            adapter_id = (data.get('Id') or url.split('/')[-1]).upper()
 
             parts = structured.split('.') if structured else []
             is_lom = (
                 (len(parts) >= 2 and parts[1].upper() in ('LOM', 'FLEXLOM')) or
                 (parts[0].upper() == 'OCP' if parts else False) or
-                (not structured and manufacturer in self._lom_manufacturers)
+                (not structured and any(m in manufacturer for m in self._lom_manufacturers)) or
+                # Dell: NIC.Integrated.X and NIC.Embedded.X are onboard NICs
+                ('INTEGRATED' in adapter_id or 'EMBEDDED' in adapter_id)
             )
             if not is_lom:
                 nic_counter += 1
