@@ -233,12 +233,14 @@ def run_inventory_loop(config, connection):
 if __name__ == '__main__':
 
     call_args = get_args()
-   
+
     warnings.filterwarnings("ignore")
 
-    enable_logging(call_args.logging, call_args.debug)
-
     configuration = get_config(call_args.config)
+
+    # Debug mode: command line flag takes precedence, then config file key.
+    debug = call_args.debug or configuration.get('debug', False)
+    enable_logging(call_args.logging, debug)
     netbox_url = configuration.get("netbox", {}).get("url", "")
     NETBOX_ENVIRONMENT = "staging" if "staging" in netbox_url else "global"
 
