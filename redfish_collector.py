@@ -866,6 +866,12 @@ class RedfishIventoryCollector:
             network_cards_updated.append(nic)
 
         self._inventory.update({'NetworkAdapters': network_cards_updated})
+        # Build ID-keyed lookup so _collect_macs_from_network_adapters can match by
+        # adapter ID instead of position (sorted URL order ≠ discovery order).
+        self._inventory['_NetworkAdaptersById'] = {
+            url.split('/')[-1].upper(): nic
+            for url, nic in zip(nic_urls, network_cards_updated)
+        }
 
     def _get_network_info_from_ethernet_interfaces(self):
         """Fallback for vendors (e.g. Fujitsu) where NetworkAdapters is empty.
@@ -1105,7 +1111,8 @@ class RedfishIventoryCollector:
             return
 
         nic_counter = 0
-        for url_idx, url in enumerate(sorted(adapter_urls)):
+        inv_adapters_by_id = self._inventory.get('_NetworkAdaptersById', {})
+        for url in sorted(adapter_urls):
             data = self.connect_server(url)
             if not data:
                 continue
@@ -1129,8 +1136,7 @@ class RedfishIventoryCollector:
 
             # Gen12: MACs in Oem.Hpe.PhysicalPorts
             # Always look up the inventory adapter for speed and port-count comparison.
-            inv_adapters = self._inventory.get('NetworkAdapters', [])
-            inv_adapter = inv_adapters[url_idx] if url_idx < len(inv_adapters) else None
+            inv_adapter = inv_adapters_by_id.get(adapter_id)
             adapter_speed = 0
             if inv_adapter:
                 adapter_speed = max(
