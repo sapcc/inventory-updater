@@ -32,6 +32,7 @@ class NetboxConnection:
         self.lom_manufacturers = {
             m.lower() for m in config.get('lom_manufacturers', [])
         }
+        self.create_missing_interfaces = config.get('create_missing_interfaces', False)
 
         self.netbox_url = os.getenv("NETBOX_URL", config.get('netbox', {}).get('url'))
         self.netbox_inventory_items_url = f"{self.netbox_url}/api/dcim/inventory-items/"
@@ -527,6 +528,49 @@ class NetboxInventoryUpdater:
                 self.device_name, err
             )
 
+    _SPEED_TO_INTERFACE_TYPE = {
+        1:   '1000base-t',
+        10:  '10gbase-x-sfpp',
+        25:  '25gbase-x-sfp28',
+        40:  '40gbase-x-qsfpp',
+        100: '100gbase-x-qsfp28',
+        200: '100gbase-x-qsfp28',  # reported as 200G but port runs at 100G (e.g. ConnectX-6 Dx)
+        400: '400gbase-x-qsfpdd',
+    }
+
+    # Reverse map: Netbox interface type value → speed in Gbps.
+    _INTERFACE_TYPE_TO_SPEED = {
+        '1000base-t':        1,
+        '10gbase-x-sfpp':    10,
+        '25gbase-x-sfp28':   25,
+        '40gbase-x-qsfpp':   40,
+        '100gbase-x-qsfp28': 100,
+        '400gbase-x-qsfpdd': 400,
+    }
+
+    def _create_interface(self, device_id, name, mac, speed_gbps):
+        """Create a missing interface in Netbox with the given name, type and MAC."""
+        iface_type = self._SPEED_TO_INTERFACE_TYPE.get(int(speed_gbps or 0))
+        if not iface_type:
+            logging.debug(
+                "  Netbox %s: No type mapping for %sGbps, skipping creation of %s",
+                self.device_name, speed_gbps, name
+            )
+            return
+        payload = json.dumps({
+            "device": device_id,
+            "name": name,
+            "type": iface_type,
+            "mac_address": mac,
+            "enabled": True,
+        })
+        url = f"{self.netbox_connection.netbox_url}/api/dcim/interfaces/"
+        self.netbox_connection.send_request(url, 'POST', data=payload)
+        logging.info(
+            "  Netbox %s: Created interface %s (%s) with MAC %s",
+            self.device_name, name, iface_type, mac
+        )
+
     def _update_interface_macs(self, device, macs_dict):
         """Update MAC addresses for device interfaces."""
         try:
@@ -541,8 +585,8 @@ class NetboxInventoryUpdater:
                 return
             
             # Update each interface MAC
-            for mac_key, mac_address in macs_dict.items():
-                self._update_single_interface_mac(interfaces, mac_key, mac_address)
+            for mac_key, mac_info in macs_dict.items():
+                self._update_single_interface_mac(interfaces, mac_key, mac_info, device['id'])
                 
         except Exception as err:
             logging.warning(
@@ -550,12 +594,16 @@ class NetboxInventoryUpdater:
                 self.device_name, err
             )
 
-    def _update_single_interface_mac(self, interfaces, interface_name, mac_address):
-        """Update a single interface MAC address."""
+    def _update_single_interface_mac(self, interfaces, interface_name, mac_info, device_id):
+        """Update a single interface MAC address, creating the interface if missing."""
         def normalise(name):
             return re.sub(r'[-_ ]+', '', name).lower()
 
         _BMC_NAMES = self.netbox_connection.bmc_interface_names
+
+        # mac_info is {'mac': str, 'speed_gbps': int}
+        raw_mac = mac_info['mac'] if isinstance(mac_info, dict) else mac_info
+        speed_gbps = mac_info.get('speed_gbps', 0) if isinstance(mac_info, dict) else 0
 
         def find_interface():
             # Non-BMC keys: exact name match only.
@@ -599,7 +647,7 @@ class NetboxInventoryUpdater:
             return None
 
         # Normalise to upper-case colon-separated AA:BB:CC:DD:EE:FF.
-        clean = mac_address.upper().replace(':', '').replace('-', '')
+        clean = raw_mac.upper().replace(':', '').replace('-', '')
         mac_address = ':'.join(clean[i:i+2] for i in range(0, 12, 2))
 
         interface = find_interface()
@@ -624,11 +672,48 @@ class NetboxInventoryUpdater:
                     self.device_name, interface['name'], err
                 )
             return
-        
-        logging.debug(
-            "  Netbox %s: Interface %s not found in Netbox",
-            self.device_name, interface_name
-        )
+
+        # Interface not found — create if enabled and speed is known.
+        if self.netbox_connection.create_missing_interfaces:
+            # When speed is unknown, try to infer from a sibling interface of the same group.
+            if not speed_gbps:
+                lom_match = re.match(r'^(L)\d+$', interface_name)
+                nic_match = re.match(r'^(NIC\d+)_Port\d+$', interface_name)
+                prefix = (lom_match or nic_match)
+                if prefix:
+                    grp = prefix.group(1)
+                    logging.debug(
+                        "  Netbox %s: Looking for sibling of %s (group=%s) in %d interfaces",
+                        self.device_name, interface_name, grp, len(interfaces)
+                    )
+                    for iface in interfaces:
+                        iname = iface.get('name', '')
+                        itype_raw = iface.get('type')
+                        if iname.startswith(grp) and itype_raw:
+                            itype = itype_raw.get('value') if isinstance(itype_raw, dict) else itype_raw
+                            speed_gbps = self._INTERFACE_TYPE_TO_SPEED.get(itype, 0)
+                            logging.debug(
+                                "  Netbox %s: Sibling candidate %s type=%s speed=%s",
+                                self.device_name, iname, itype, speed_gbps
+                            )
+                            if speed_gbps:
+                                logging.debug(
+                                    "  Netbox %s: Inferred speed %sGbps for %s from sibling %s",
+                                    self.device_name, speed_gbps, interface_name, iname
+                                )
+                                break
+            if speed_gbps:
+                self._create_interface(device_id, interface_name, mac_address, speed_gbps)
+            else:
+                logging.debug(
+                    "  Netbox %s: Interface %s not found in Netbox (speed unknown, cannot create)",
+                    self.device_name, interface_name
+                )
+        else:
+            logging.debug(
+                "  Netbox %s: Interface %s not found in Netbox",
+                self.device_name, interface_name
+            )
 
     def filter_items(self, inventory_items, filter_string):
         """
