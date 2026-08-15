@@ -1002,7 +1002,7 @@ class RedfishIventoryCollector:
                     mac_key = mac_key_mapping.get(vendor, "MACAddress")
                     mac = response.get(mac_key)
                     if mac:
-                        remoteboard_macs['remoteboard'] = mac
+                        remoteboard_macs['remoteboard'] = {'mac': mac, 'speed_gbps': 0}
             except Exception as err:
                 logging.warning(
                     "  Target %s: Failed to get remoteboard MAC: %s",
@@ -1086,7 +1086,7 @@ class RedfishIventoryCollector:
                     else:
                         key = f"NIC{nic_counter}_Port{port_idx}"
                     logging.debug("  Target %s:   %s = %s", self.target, key, mac)
-                    macs[key] = mac
+                    macs[key] = {'mac': mac, 'speed_gbps': 0}
 
         return True
 
@@ -1128,24 +1128,44 @@ class RedfishIventoryCollector:
                 nic_counter += 1
 
             # Gen12: MACs in Oem.Hpe.PhysicalPorts
+            # Always look up the inventory adapter for speed and port-count comparison.
+            inv_adapters = self._inventory.get('NetworkAdapters', [])
+            inv_adapter = inv_adapters[url_idx] if url_idx < len(inv_adapters) else None
+            adapter_speed = 0
+            if inv_adapter:
+                adapter_speed = max(
+                    (p.get('PortSpeed') or 0 for p in inv_adapter.get('Ports', [])),
+                    default=0
+                )
+
             hpe_ports = hpe_oem.get('PhysicalPorts', [])
+            inv_ports = sorted(
+                inv_adapter.get('Ports', []) if inv_adapter else [],
+                key=lambda p: p.get('MAC') or ''
+            )
+            # Use hpe_ports when available; fall back to inventory ports for any missing entries.
+            # hpe_ports may be sparse (only connected ports), so merge using sorted MAC lists.
             if hpe_ports:
-                sorted_ports = sorted(hpe_ports, key=lambda p: p.get('MacAddress') or '')
-                for port_idx, port in enumerate(sorted_ports, start=1):
-                    mac = port.get('MacAddress')
+                sorted_hpe = sorted(hpe_ports, key=lambda p: p.get('MacAddress') or '')
+                # Build a combined list: prefer hpe_ports, fill gaps from inv_ports by position.
+                n_ports = max(len(sorted_hpe), len(inv_ports))
+                for port_idx in range(1, n_ports + 1):
+                    hpe_port = sorted_hpe[port_idx - 1] if port_idx - 1 < len(sorted_hpe) else None
+                    inv_port = inv_ports[port_idx - 1] if port_idx - 1 < len(inv_ports) else None
+                    mac = (hpe_port.get('MacAddress') if hpe_port else None) or \
+                          (inv_port.get('MAC') if inv_port else None)
                     if mac:
                         if structured:
                             key = self._mac_key_from_structured_name(structured, port_idx, nic_counter)
                         else:
                             key = f"NIC{nic_counter}_Port{port_idx}"
+                        speed_gbps = round((hpe_port.get('SpeedMbps') or 0) / 1000) \
+                            if hpe_port else 0
+                        speed_gbps = speed_gbps or (inv_port.get('PortSpeed') or 0 \
+                            if inv_port else 0) or adapter_speed
                         logging.debug("  Target %s:   %s = %s", self.target, key, mac)
-                        macs[key] = mac
+                        macs[key] = {'mac': mac, 'speed_gbps': speed_gbps}
                 continue
-
-            # Non-HPE or older iLO: MACs already in inventory Ports (populated by _get_network_info).
-            # Match by position in the sorted URL list since $select strips @odata.id and Id.
-            inv_adapters = self._inventory.get('NetworkAdapters', [])
-            inv_adapter = inv_adapters[url_idx] if url_idx < len(inv_adapters) else None
             if not inv_adapter:
                 continue
             ports = sorted(inv_adapter.get('Ports', []), key=lambda p: p.get('MAC') or '')
@@ -1159,7 +1179,7 @@ class RedfishIventoryCollector:
                     else:
                         key = f"NIC{nic_counter}_Port{port_idx}"
                     logging.debug("  Target %s:   %s = %s", self.target, key, mac)
-                    macs[key] = mac
+                    macs[key] = {'mac': mac, 'speed_gbps': port.get('PortSpeed') or 0}
 
     def get_mac_serial_data(self):
         """
