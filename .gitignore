@@ -5,3 +5,5 @@ config/*
 logs/*
 servers*.txt
 request.http
+test-reports/
+.venv/*
