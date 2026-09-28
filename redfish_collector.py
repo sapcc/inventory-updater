@@ -527,7 +527,7 @@ class RedfishIventoryCollector:
             power_data = self.connect_server(power_url)
             if power_data:
                 self._inventory.update({'PSU': []})
-                for psu in power_data['PowerSupplies']:
+                for psu in power_data.get('PowerSupplies', []):
                     psu_info = self._get_device_info(psu, fields)
                     self._inventory['PSU'].append(psu_info)
 
@@ -748,7 +748,8 @@ class RedfishIventoryCollector:
             if processor['Model']:
                 processor['Description'] = processor['Model']
             if processor['MaxSpeedMHz']:
-                processor['Description'] = f"{processor['Description']} @ {processor['MaxSpeedMHz']/1000}GHz"
+                base = processor.get('Description') or processor.get('Name') or 'Unknown CPU'
+                processor['Description'] = f"{base} @ {processor['MaxSpeedMHz']/1000}GHz"
             processors_updated.append(processor)
 
         self._inventory.update({'Processors': processors_updated})
