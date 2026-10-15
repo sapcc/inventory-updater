@@ -812,11 +812,12 @@ class NetboxInventoryUpdater:
 
                     server_inventory_gpus.append(item)
 
-        # NetworkAdapters
+        # NetworkAdapters — broad filter so manually-added legacy entries are also
+        # managed (inventory-updater is authoritative; old entries get replaced).
         if server_inventory_nics:
             netbox_inventory_nics = self.filter_items(
                 netbox_inventory,
-                "NIC|Mellanox|Broadcom|Intel|Pensando"
+                "NIC|DPU|Mellanox|Broadcom|Intel|Pensando|Nvidia"
             )
 
             netbox_inventory_nics = self._check_item_amount(
