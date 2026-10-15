@@ -168,7 +168,6 @@ class InventoryCollector:
         """
         Check the inventory of the server.
         """
-        logging.info("==> Server %s", server)
 
         server_collector = None
         server_pattern = re.compile(r"^([a-z]+\d{1,3})-([a-z]{2,3}\d{3})(?:-[a-z]+\d+)?(\..+)$")
@@ -194,16 +193,15 @@ class InventoryCollector:
         if not manufacturer:
             return 1
 
-        logging.info("==> Server %s: Collecting inventory", server)
-
         inventory = {}
-        logging.info("  Target %s: Collecting using RedFish ...", bmc)
+        logging.info("  Target %s: Collecting inventory using RedFish ...", server)
 
         try:
             server_collector = RedfishIventoryCollector(
                 timeout           = int(os.getenv('CONNECTION_TIMEOUT',
                                                self.config.get('connection_timeout', 30))),
                 target            = bmc,
+                label             = server,
                 usr               = self.usr,
                 pwd               = self.pwd,
                 vendor_aliases    = self.netbox_connection.manufacturer_aliases,
@@ -217,18 +215,18 @@ class InventoryCollector:
             inventory = server_collector.collect()
 
         except CollectorException as err:
-            logging.error("  Target %s: Error collecting inventory: %s", bmc, err)
+            logging.error("  Target %s: Error collecting inventory: %s", server, err)
 
         except (requests.exceptions.RequestException, ConnectionError, TimeoutError) as err:
-            logging.error("  Target %s: Network error during inventory collection: %s", bmc, type(err).__name__)
-            raise HandlerException(f"Network error for {bmc}: {type(err).__name__}") from err
+            logging.error("  Target %s: Network error during inventory collection: %s", server, type(err).__name__)
+            raise HandlerException(f"Network error for {server}: {type(err).__name__}") from err
 
         except (KeyError, ValueError, TypeError) as err:
-            logging.error("  Target %s: Data parsing error during inventory collection: %s", bmc, err)
-            raise HandlerException(f"Data parsing error for {bmc}: {err}") from err
+            logging.error("  Target %s: Data parsing error during inventory collection: %s", server, err)
+            raise HandlerException(f"Data parsing error for {server}: {err}") from err
 
         except Exception as err:
-            logging.error("  Target %s: Unexpected error during inventory collection: %s", bmc, type(err).__name__)
+            logging.error("  Target %s: Unexpected error during inventory collection: %s", server, type(err).__name__)
             raise HandlerException(traceback.format_exc()) from err
 
         finally:
@@ -236,14 +234,11 @@ class InventoryCollector:
                 if server_collector:
                     server_collector.close_session()
             except (requests.exceptions.RequestException, ConnectionError) as err:
-                logging.warning("  Target %s: Error closing session: %s", bmc, type(err).__name__)
+                logging.warning("  Target %s: Error closing session: %s", server, type(err).__name__)
 
         if inventory:
-            logging.info("==> Server %s: Updating Netbox inventory", server)
-            
+            # Updating Netbox inventory
             updater.update_device_inventory_and_mac_serial(inventory)
-
-            logging.info("==> Server %s: Done.", server)
 
             del inventory
             del updater
