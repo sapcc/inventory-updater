@@ -16,9 +16,9 @@ class RedfishIventoryCollector:
     collects the inventory from a server using Redfish
     """
 
-    def __init__(self, timeout, target, usr, pwd, vendor_aliases=None, lom_manufacturers=None):
+    def __init__(self, timeout, target, usr, pwd, vendor_aliases=None, lom_manufacturers=None, label=None):
 
-        self.target = target
+        self.target = label if label is not None else target
         self.ip_address = self.get_bmc_ip_address(target)
 
         self._username = usr
@@ -392,10 +392,10 @@ class RedfishIventoryCollector:
             if url in server_info:
                 self._urls.update({url: server_info[url]['@odata.id']})
 
-        # HPE-specific: BaseNetworkAdapters is at a known path relative to the system URL.
-        # Only set when vendor is HPE — self._vendor comes from /redfish/v1 Vendor field.
-        if self._vendor == 'HPE':
-            self._urls['BaseNetworkAdapters'] = self._urls['Systems'] + '/BaseNetworkAdapters'
+        base_na_url = self._urls['Systems'] + '/BaseNetworkAdapters'
+        probe = self.connect_server(base_na_url, not_found_ok=True)
+        if probe and probe.get('Members') is not None:
+            self._urls['BaseNetworkAdapters'] = base_na_url
 
     def _get_chassis_urls(self):
         logging.debug("  Target %s: Get the Chassis URLs.", self.target)
@@ -565,9 +565,9 @@ class RedfishIventoryCollector:
             dimm_info['NetboxName'] = f"RAM {ram_rounded}GB"
 
             # HPE has the DIMM Manufacturer in the OEM data
-            oem_data = dimm.get('Oem', {}).get('Hpe', {})
-            if oem_data.get('DIMMStatus') != 'NotPresent':
-                dimm_info['Manufacturer'] = oem_data.get('VendorName')
+            oem_hpe = dimm.get('Oem', {}).get('Hpe', {})
+            if not dimm_info.get('Manufacturer') and oem_hpe.get('DIMMStatus') != 'NotPresent':
+                dimm_info['Manufacturer'] = oem_hpe.get('VendorName')
 
             self._inventory['Memory'].append(dimm_info)
 
@@ -706,7 +706,7 @@ class RedfishIventoryCollector:
                     drive['MediaType'] in ["SSD", "HDD"]):
                     drive['NetboxName'] = f"{drive['MediaType']} {capacity_gb}GB"
                     # Supermicro is missing the Protocol for SSDs
-                    drive['Protocol'] = getattr(drive, 'Protocol', 'SATA')
+                    drive['Protocol'] = drive.get('Protocol') or 'SATA'
                 else:
                     logging.warning(
                         "  Target %s: Unknown Drive Type! Protocol = %s, MediaType = %s",
@@ -862,7 +862,26 @@ class RedfishIventoryCollector:
 
                 port_speed_gbps = max(((port.get('PortSpeed') or 0) for port in nic['Ports']), default=0)
 
-            nic['NetboxName'] = f"NIC {int(port_speed_gbps)}Gb" if port_speed_gbps else "NIC"
+            part_number = (nic.get('PartNumber') or '').strip().upper()
+            name_model = ((nic.get('Name') or '') + ' ' + (nic.get('Model') or '')).lower()
+            is_bluefield = (
+                part_number.startswith(('MBF2', 'MBF3')) or
+                'bluefield' in name_model
+            )
+            prefix = "DPU" if is_bluefield else "NIC"
+            nic['NetboxName'] = f"{prefix} {int(port_speed_gbps)}Gb" if port_speed_gbps else prefix
+
+            # Build description from Model, optionally prefixed by Name when it adds context.
+            # Dell Redfish uses "Network Adapter View" as a generic Name that adds no value.
+            _GENERIC_NIC_NAMES = {'network adapter view', 'network adapter', 'ethernet adapter'}
+            nic_name = (nic.get('Name') or '').strip()
+            nic_model = (nic.get('Model') or '').strip()
+            if nic_name.lower() in _GENERIC_NIC_NAMES:
+                nic_name = ''
+            if nic_model and (not nic_name or nic_model.lower() not in nic_name.lower()):
+                nic['Description'] = f"{nic_name} ({nic_model})" if nic_name else nic_model
+            else:
+                nic['Description'] = nic_name or nic_model
             nic.pop('NetworkPorts')
             network_cards_updated.append(nic)
 
@@ -980,43 +999,53 @@ class RedfishIventoryCollector:
 
     def _get_remoteboard_mac(self):
         """Get the MAC address from the BMC's management interface."""
-        remoteboard_macs = {}
-        
-        vendor = self._vendor or self._inventory.get('Manufacturer', '')
-        vendor = self._vendor_aliases.get(vendor.lower(), vendor) if vendor else vendor
-        
-        # Vendor-specific BMC NIC endpoints
-        remoteboard_mapping = {
-            "Dell": "/redfish/v1/Managers/iDRAC.Embedded.1/EthernetInterfaces/NIC.1",
-            "Lenovo": "/redfish/v1/Managers/1/EthernetInterfaces/ToHost",
-            "HPE": "/redfish/v1/Managers/1/EthernetInterfaces/1",
-            "Supermicro": "/redfish/v1/Managers/1/EthernetInterfaces/1",
-            "Fujitsu": "/redfish/v1/Managers/iRMC/EthernetInterfaces/0"
-        }
-        
-        mac_key_mapping = {
-            "Dell": "PermanentMACAddress",
-            "Lenovo": "MACAddress",
-            "HPE": "MACAddress",
-            "Supermicro": "MACAddress",
-            "Fujitsu": "MACAddress"
-        }
-        
-        if vendor in remoteboard_mapping:
-            try:
-                response = self.connect_server(remoteboard_mapping[vendor])
-                if response:
-                    mac_key = mac_key_mapping.get(vendor, "MACAddress")
-                    mac = response.get(mac_key)
-                    if mac:
-                        remoteboard_macs['remoteboard'] = {'mac': mac, 'speed_gbps': 0}
-            except Exception as err:
-                logging.warning(
-                    "  Target %s: Failed to get remoteboard MAC: %s",
-                    self.target, err
+        managers = self.connect_server("/redfish/v1/Managers")
+        if not managers or not managers.get('Members'):
+            logging.warning("  Target %s: No Managers collection found.", self.target)
+            return {}
+
+        members = managers['Members']
+        bmc_url = None
+        if len(members) == 1:
+            bmc_url = members[0]['@odata.id']
+        else:
+            for member_ref in members:
+                m = self.connect_server(member_ref['@odata.id'])
+                if m and m.get('ManagerType') == 'BMC':
+                    bmc_url = member_ref['@odata.id']
+                    break
+
+        if not bmc_url:
+            logging.warning("  Target %s: No BMC manager found in Managers collection.", self.target)
+            return {}
+
+        bmc = self.connect_server(bmc_url)
+        if not bmc or 'EthernetInterfaces' not in bmc:
+            logging.warning("  Target %s: BMC manager has no EthernetInterfaces link.", self.target)
+            return {}
+
+        ifaces = self.connect_server(bmc['EthernetInterfaces']['@odata.id'])
+        if not ifaces or not ifaces.get('Members'):
+            return {}
+
+        for iface_ref in ifaces['Members']:
+            iface = self.connect_server(iface_ref['@odata.id'])
+            if not iface:
+                continue
+            if not iface.get('InterfaceEnabled', True):
+                continue
+            mac = iface.get('PermanentMACAddress') or iface.get('MACAddress')
+            if mac:
+                logging.debug(
+                    "  Target %s: remoteboard MAC from %s: %s",
+                    self.target, iface_ref['@odata.id'], mac
                 )
-        
-        return remoteboard_macs
+                return {'remoteboard': {'mac': mac, 'speed_gbps': 0}}
+
+        logging.warning(
+            "  Target %s: No enabled EthernetInterface with MAC found on BMC.", self.target
+        )
+        return {}
 
     def _mac_key_from_structured_name(self, structured, port_idx, nic_idx=None):
         """Return the Netbox interface key for an HPE StructuredName + 1-based port index.
