@@ -209,24 +209,26 @@ def run_inventory_loop(config, connection):
             logging.info("Keyboard Interrupt. Stopping Inventory Updater...")
             sys.exit()
 
-        if scrape_interval > 0:
-            elapsed = time.time() - round_start
-            sleep_time = max(0, scrape_interval - elapsed)
+        if scrape_interval == 0:
+            break
 
-            def fmt(seconds):
-                m, s = divmod(int(seconds), 60)
-                h, m = divmod(m, 60)
-                if h > 0:
-                    return f"{h}h {m:02d}m"
-                if m > 0:
-                    return f"{m}m {s:02d}s"
-                return f"{s}s"
+        elapsed = time.time() - round_start
+        sleep_time = max(0, scrape_interval - elapsed)
 
-            if sleep_time > 0:
-                logging.info("==> Round finished in %s. Sleeping for %s.", fmt(elapsed), fmt(sleep_time))
-                time.sleep(sleep_time)
-            else:
-                logging.info("==> Round finished in %s, exceeding interval of %s. Starting next round immediately.", fmt(elapsed), fmt(scrape_interval))
+        def fmt(seconds):
+            m, s = divmod(int(seconds), 60)
+            h, m = divmod(m, 60)
+            if h > 0:
+                return f"{h}h {m:02d}m"
+            if m > 0:
+                return f"{m}m {s:02d}s"
+            return f"{s}s"
+
+        if sleep_time > 0:
+            logging.info("==> Round finished in %s. Sleeping for %s.", fmt(elapsed), fmt(sleep_time))
+            time.sleep(sleep_time)
+        else:
+            logging.info("==> Round finished in %s, exceeding interval of %s. Starting next round immediately.", fmt(elapsed), fmt(scrape_interval))
 
 
 
