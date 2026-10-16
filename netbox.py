@@ -812,8 +812,7 @@ class NetboxInventoryUpdater:
 
                     server_inventory_gpus.append(item)
 
-        # NetworkAdapters — broad filter so manually-added legacy entries are also
-        # managed (inventory-updater is authoritative; old entries get replaced).
+        # NetworkAdapters
         if server_inventory_nics:
             netbox_inventory_nics = self.filter_items(
                 netbox_inventory,

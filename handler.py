@@ -17,7 +17,7 @@ from netbox import NetboxInventoryUpdater
 
 # pylint: disable=no-member
 
-class WelcomePage:
+class WelcomePage:  # pylint: disable=too-few-public-methods
     """
     Create the Welcome page for the API.
     """
@@ -104,7 +104,7 @@ class InventoryCollector:
             sys.exit(1)
 
 
-    def on_get(self, req, resp):
+    def on_get(self, req, resp):  # pylint: disable=too-many-locals
         """
         Define the GET method for the API.
         """
@@ -131,8 +131,9 @@ class InventoryCollector:
                         target = node + "-" + pod + suffix
                         logging.info("Target %s: DNS lookup successful.", target)
                     else:
-                        logging.warning("Target %s: Reverse DNS hostname %s does not match naming convention.",
-                                        target, host)
+                        logging.warning(
+                            "Target %s: Reverse DNS hostname %s does not match naming convention.",
+                            target, host)
             except socket.herror as err:
                 msg = f"Target {target}: Reverse DNS lookup failed: {err}"
                 logging.error(msg)
@@ -153,8 +154,11 @@ class InventoryCollector:
         else:
             resp.status = falcon.HTTP_500
             resp.content_type = 'application/json'
-            resp.text = json.dumps({"status": "error", "target": target,
-                                    "message": "Failed to collect inventory. Check logs for details."})
+            resp.text = json.dumps({
+                "status": "error",
+                "target": target,
+                "message": "Failed to collect inventory. Check logs for details.",
+            })
 
     def process_single_server(self, server):
         """
@@ -218,15 +222,20 @@ class InventoryCollector:
             logging.error("  Target %s: Error collecting inventory: %s", server, err)
 
         except (requests.exceptions.RequestException, ConnectionError, TimeoutError) as err:
-            logging.error("  Target %s: Network error during inventory collection: %s", server, type(err).__name__)
+            logging.error(
+                "  Target %s: Network error during inventory collection: %s",
+                server, type(err).__name__)
             raise HandlerException(f"Network error for {server}: {type(err).__name__}") from err
 
         except (KeyError, ValueError, TypeError) as err:
-            logging.error("  Target %s: Data parsing error during inventory collection: %s", server, err)
+            logging.error(
+                "  Target %s: Data parsing error during inventory collection: %s", server, err)
             raise HandlerException(f"Data parsing error for {server}: {err}") from err
 
         except Exception as err:
-            logging.error("  Target %s: Unexpected error during inventory collection: %s", server, type(err).__name__)
+            logging.error(
+                "  Target %s: Unexpected error during inventory collection: %s",
+                server, type(err).__name__)
             raise HandlerException(traceback.format_exc()) from err
 
         finally:
@@ -234,7 +243,8 @@ class InventoryCollector:
                 if server_collector:
                     server_collector.close_session()
             except (requests.exceptions.RequestException, ConnectionError) as err:
-                logging.warning("  Target %s: Error closing session: %s", server, type(err).__name__)
+                logging.warning(
+                    "  Target %s: Error closing session: %s", server, type(err).__name__)
 
         if inventory:
             # Updating Netbox inventory

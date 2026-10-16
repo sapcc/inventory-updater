@@ -37,6 +37,7 @@ DEFAULT_WORKERS = 5
 
 
 def wait_for_server(base_url: str, timeout: int = 30) -> bool:
+    """Wait until the inventory-updater API is reachable or the timeout expires."""
     print(f"Waiting for inventory-updater at {base_url} ...", end="", flush=True)
     deadline = time.monotonic() + timeout
     while True:
@@ -53,6 +54,7 @@ def wait_for_server(base_url: str, timeout: int = 30) -> bool:
 
 
 def query_target(base_url: str, target: str, timeout: int, output_dir: Path) -> dict:
+    """Query the inventory endpoint for one target and write the JSON response to output_dir."""
     url = f"{base_url}/inventory?target={target}"
     start = time.monotonic()
     result = {"target": target, "status": None, "elapsed": None, "success": False, "error": None}
@@ -72,7 +74,7 @@ def query_target(base_url: str, target: str, timeout: int, output_dir: Path) -> 
     except requests.exceptions.Timeout:
         result["elapsed"] = round(time.monotonic() - start, 1)
         result["error"] = f"Timeout after {result['elapsed']}s"
-    except Exception as exc:
+    except (requests.exceptions.RequestException, OSError) as exc:
         result["elapsed"] = round(time.monotonic() - start, 1)
         result["error"] = str(exc)
 
@@ -80,6 +82,7 @@ def query_target(base_url: str, target: str, timeout: int, output_dir: Path) -> 
 
 
 def load_servers(path: str) -> list[str]:
+    """Read hostnames from a file, one per line, ignoring blank lines and comments."""
     servers = []
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -90,6 +93,7 @@ def load_servers(path: str) -> list[str]:
 
 
 def print_summary(results: list[dict]) -> int:
+    """Print a pass/fail summary table and return the number of failures."""
     passed = [r for r in results if r["success"]]
     failed = [r for r in results if not r["success"]]
 
@@ -113,7 +117,8 @@ def print_summary(results: list[dict]) -> int:
     return len(failed)
 
 
-def main() -> None:
+def parse_args() -> argparse.Namespace:
+    """Build and return the parsed CLI arguments."""
     parser = argparse.ArgumentParser(
         description="Test the inventory-updater API against one or more servers."
     )
@@ -130,7 +135,12 @@ def main() -> None:
                         help="Directory for JSON responses (default: %(default)s)")
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS, metavar="N",
                         help="Parallel requests (default: %(default)s)")
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+def main() -> None:
+    """Run queries against all targets and exit non-zero on failures."""
+    args = parse_args()
 
     base_url = args.url.rstrip("/")
     output_dir = Path(args.output)
