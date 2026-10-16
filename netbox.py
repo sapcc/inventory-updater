@@ -426,7 +426,7 @@ class NetboxInventoryUpdater:
                 if candidates:
                     current_netbox_item = candidates[0]
 
-            if current_netbox_item is not None:
+            if current_netbox_item:
                 matched_netbox_ids.add(current_netbox_item['id'])
 
             old_netbox_item_json = json.dumps(self._convert_netbox_inventory(current_netbox_item or []))
@@ -467,6 +467,15 @@ class NetboxInventoryUpdater:
                         new_netbox_item['name']
                     )
                     self.add_inventory_item(new_netbox_item_json)
+
+        for nb_item in netbox_inventory:
+            if nb_item['id'] not in matched_netbox_ids:
+                logging.info(
+                    "  Netbox %s: Removing stale item %s",
+                    self.device_name,
+                    nb_item['name']
+                )
+                self.remove_inventory_item(nb_item)
 
     def update_device_inventory_and_mac_serial(self, inventory):
         """
