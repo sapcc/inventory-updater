@@ -16,10 +16,10 @@ class RedfishIventoryCollector:
     collects the inventory from a server using Redfish
     """
 
-    def __init__(self, timeout, target, usr, pwd, vendor_aliases=None, lom_manufacturers=None, label=None):
+    def __init__(self, timeout, target, usr, pwd, vendor_aliases=None, lom_manufacturers=None, label=None, bmc_ip=None):
 
         self.target = label if label is not None else target
-        self.ip_address = self.get_bmc_ip_address(target)
+        self.ip_address = bmc_ip if bmc_ip is not None else self.get_bmc_ip_address(target)
 
         self._username = usr
         self._password = pwd

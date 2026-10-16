@@ -119,6 +119,7 @@ class InventoryCollector:
             r"([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$"
         )
 
+        bmc_ip = None
         if ip_re.match(target):
             logging.info("Target %s: Target is an IP Address.", target)
             try:
@@ -128,8 +129,11 @@ class InventoryCollector:
                     matches = re.match(server_pattern, host)
                     if matches:
                         node, pod, suffix = matches.groups()
+                        bmc_ip = target
                         target = node + "-" + pod + suffix
-                        logging.info("Target %s: DNS lookup successful.", target)
+                        logging.info(
+                            "Target %s: DNS lookup successful, using IP %s for BMC.",
+                            target, bmc_ip)
                     else:
                         logging.warning(
                             "Target %s: Reverse DNS hostname %s does not match naming convention.",
@@ -141,7 +145,7 @@ class InventoryCollector:
 
         start_time = time.time()
         try:
-            result = self.process_single_server(target)
+            result = self.process_single_server(target, bmc_ip=bmc_ip)
         except HandlerException as exc:
             logging.error("A Handler Exception occured: %s", traceback.format_exc())
             raise falcon.HTTPBadRequest(description=str(exc)) from exc
@@ -160,15 +164,15 @@ class InventoryCollector:
                 "message": "Failed to collect inventory. Check logs for details.",
             })
 
-    def process_single_server(self, server):
+    def process_single_server(self, server, bmc_ip=None):
         """
         Process a single server: collect inventory and update all data in Netbox.
         This method is used by both API mode and daemon/loop mode.
         """
-        result = self.check_server_inventory(server)
+        result = self.check_server_inventory(server, bmc_ip=bmc_ip)
         return result
 
-    def check_server_inventory(self, server):
+    def check_server_inventory(self, server, bmc_ip=None):
         """
         Check the inventory of the server.
         """
@@ -209,7 +213,8 @@ class InventoryCollector:
                 usr               = self.usr,
                 pwd               = self.pwd,
                 vendor_aliases    = self.netbox_connection.manufacturer_aliases,
-                lom_manufacturers = self.netbox_connection.lom_manufacturers
+                lom_manufacturers = self.netbox_connection.lom_manufacturers,
+                bmc_ip            = bmc_ip
             )
             server_collector.get_session()
 
