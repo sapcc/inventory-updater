@@ -1,68 +1,76 @@
-"""
+﻿"""
 Module for Netbox API interaction
 """
+
+import json
 import logging
 import os
 import re
-import json
 import sys
 from collections import defaultdict
+from typing import ClassVar
+
 import requests
+
+logger = logging.getLogger(__name__)
+
 
 class NetboxConnectionException(Exception):
     """
     Exception class for the Netbox Connection.
     """
 
+
 class NetboxConnection:
     """
     Class for Netbox API connection
     """
+
     def __init__(self, config):
-        self.region = os.getenv("REGION", config.get('region'))
-        self.netbox_query = os.getenv("NETBOX_QUERY", config.get('netbox', {}).get('query'))
-        self.manufacturer_aliases = config.get('manufacturer_aliases', {})
+        self.region = os.getenv("REGION", config.get("region"))
+        self.netbox_query = os.getenv(
+            "NETBOX_QUERY", config.get("netbox", {}).get("query")
+        )
+        self.manufacturer_aliases = config.get("manufacturer_aliases", {})
         self.bmc_interface_names = {
-            re.sub(r'[-_ ]+', '', n).lower()
-            for n in config.get('bmc_interface_names',
-                ['remoteboard', 'iLO', 'iDRAC', 'XCC', 'iRMC', 'BMC', 'MGMT'])
+            re.sub(r"[-_ ]+", "", n).lower()
+            for n in config.get(
+                "bmc_interface_names",
+                ["remoteboard", "iLO", "iDRAC", "XCC", "iRMC", "BMC", "MGMT"],
+            )
         }
         # Manufacturers whose NICs map to L-type interfaces (L1, L2, ...) rather than NIC1, NIC2.
         # Typically onboard/management NICs (Intel I350, Broadcom BCM5719 OCP).
         self.lom_manufacturers = {
-            m.lower() for m in config.get('lom_manufacturers', [])
+            m.lower() for m in config.get("lom_manufacturers", [])
         }
-        self.create_missing_interfaces = config.get('create_missing_interfaces', False)
+        self.create_missing_interfaces = config.get("create_missing_interfaces", False)
 
-        self.netbox_url = os.getenv("NETBOX_URL", config.get('netbox', {}).get('url'))
+        self.netbox_url = os.getenv("NETBOX_URL", config.get("netbox", {}).get("url"))
         self.netbox_inventory_items_url = f"{self.netbox_url}/api/dcim/inventory-items/"
         self.netbox_devices_url = f"{self.netbox_url}/api/dcim/devices/"
         self.netbox_manufacturers_url = f"{self.netbox_url}/api/dcim/manufacturers/"
         self.netbox_regions_url = f"{self.netbox_url}/api/dcim/regions/"
 
-        logging.info("Establishing connection to Netbox %s", self.netbox_url)
-        netbox_token = os.getenv("NETBOX_TOKEN", config.get('netbox', {}).get('token'))
+        logger.info("Establishing connection to Netbox %s", self.netbox_url)
+        netbox_token = os.getenv("NETBOX_TOKEN", config.get("netbox", {}).get("token"))
 
         if not netbox_token:
-            logging.error("No NETBOX_TOKEN found in environment or config file")
+            logger.error("No NETBOX_TOKEN found in environment or config file")
             sys.exit(1)
 
         self._headers = {
-            'Content-type': 'application/json',
-            "Authorization": f"Token {netbox_token}"
+            "Content-type": "application/json",
+            "Authorization": f"Token {netbox_token}",
         }
         self._session = requests.session()
 
-    def send_request(self, url, method, params=None, data=None):
+    def send_request(self, url, method, params=None, data=None) -> dict:
         """
         Send a request to Netbox API
         """
         req = requests.Request(
-            method=method,
-            url=url,
-            headers=self._headers,
-            params=params,
-            data=data
+            method=method, url=url, headers=self._headers, params=params, data=data
         )
 
         prepped = self._session.prepare_request(req)
@@ -73,14 +81,14 @@ class NetboxConnection:
             response.raise_for_status()
 
         except requests.exceptions.HTTPError as err:
-            raise NetboxConnectionException(
-                f"Netbox HTTP Error: {err}"
-            ) from err
+            raise NetboxConnectionException(f"Netbox HTTP Error: {err}") from err
 
         except requests.exceptions.ConnectionError as err:
             message = f"Netbox Connection Error: {err}"
             if response:
-                message = f"Netbox Connection Error. Response : {err}: {response.content}"
+                message = (
+                    f"Netbox Connection Error. Response : {err}: {response.content}"
+                )
             raise NetboxConnectionException(message) from err
 
         if method == "GET" and response.json():
@@ -89,7 +97,7 @@ class NetboxConnection:
             return result
 
         response.close()
-        return response
+        return {}
 
     def get_region(self):
         """
@@ -97,12 +105,14 @@ class NetboxConnection:
         """
         results = []
         url = self.netbox_regions_url
-        params = {'q': self.region}
-        response = self.send_request(url=url, method='GET', params=params)
-        results = response.get('results')
+        params = {"q": self.region}
+        response = self.send_request(url=url, method="GET", params=params)
+        results = response.get("results")
 
         if not results:
-            logging.error("  Netbox: Region %s not found: %s", self.region, response['detail'])
+            logger.error(
+                "  Netbox: Region %s not found: %s", self.region, response["detail"]
+            )
             sys.exit(1)
 
         else:
@@ -114,25 +124,26 @@ class NetboxConnection:
         """
         devices = []
         url = self.netbox_devices_url
-        params = {
-            'region_id': self.get_region()['id'],
-            'exclude': 'config_context'
-        }
-        params.update(self.netbox_query)
+        params = {"region_id": self.get_region()["id"], "exclude": "config_context"}
+        netbox_query = self.netbox_query
+        if isinstance(netbox_query, dict):
+            params.update(netbox_query)
 
-        page = self.send_request(url=url, method='GET', params=params)
-        devices = page['results']
+        page = self.send_request(url=url, method="GET", params=params)
+        devices = page["results"]
 
-        while page['next']:
-            page = self.send_request(url=page['next'], method='GET', params=params)
-            devices.extend(page['results'])
+        while page["next"]:
+            page = self.send_request(url=page["next"], method="GET", params=params)
+            devices.extend(page["results"])
 
         return devices
+
 
 class NetboxInventoryUpdater:
     """
     Class for Netbox Inventory interaction
     """
+
     def __init__(self, device_name, netbox_connection):
 
         self.device_name = device_name
@@ -152,26 +163,45 @@ class NetboxInventoryUpdater:
           3. CamelCase-split tokens of the original name, e.g. "Skhynix" →
              ["Sk", "hynix"] — "hynix" matches "Hynix Semiconductor" ✓
         """
-        _GENERIC_SUFFIXES = frozenset({
-            'corporation', 'corp', 'incorporated', 'inc', 'limited', 'ltd',
-            'company', 'co', 'group', 'holdings', 'international', 'technologies',
-            'technology', 'semiconductor', 'systems', 'electronics',
-        })
+        _GENERIC_SUFFIXES = frozenset(
+            {
+                "corporation",
+                "corp",
+                "incorporated",
+                "inc",
+                "limited",
+                "ltd",
+                "company",
+                "co",
+                "group",
+                "holdings",
+                "international",
+                "technologies",
+                "technology",
+                "semiconductor",
+                "systems",
+                "electronics",
+            }
+        )
         # Well-known abbreviations that Netbox stores under their full trade name.
         # Loaded from config (manufacturer_aliases).
-        _ALIASES = {k.lower(): v for k, v in self.netbox_connection.manufacturer_aliases.items()}
+        _ALIASES = {
+            k.lower(): v for k, v in self.netbox_connection.manufacturer_aliases.items()
+        }
         url = self.netbox_connection.netbox_manufacturers_url
         if manufacturer:
             # Strip trademark/registered symbols and normalise whitespace
-            clean = re.sub(r'[\(®™]\s*(?:R|TM)\s*\)', '', manufacturer)
-            clean = re.sub(r'[®™]', '', clean).strip()
+            clean = re.sub(r"[\(®™]\s*(?:R|TM)\s*\)", "", manufacturer)
+            clean = re.sub(r"[®™]", "", clean).strip()
 
             # Replace known abbreviations before any query logic
             clean = _ALIASES.get(clean.lower(), clean)
 
             # Build candidate query list, deduplicating while preserving order.
             # CamelCase split: "SKHynix" → ["SK", "Hynix"], "Skhynix" → ["Skhynix"]
-            camel_tokens = re.findall(r'[A-Z]{2,}(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]', manufacturer)
+            camel_tokens = re.findall(
+                r"[A-Z]{2,}(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]", manufacturer
+            )
             # For single-word tokens that may have a short prefix glued on (e.g. "Skhynix"),
             # also try progressively shorter suffixes so "hynix" is eventually queried.
             suffix_tokens = []
@@ -181,7 +211,10 @@ class NetboxInventoryUpdater:
                         suffix_tokens.append(word[i:])
             candidates = (
                 [clean]
-                + sorted(clean.split(), key=lambda w: (w.lower() in _GENERIC_SUFFIXES, -len(w)))
+                + sorted(
+                    clean.split(),
+                    key=lambda w: (w.lower() in _GENERIC_SUFFIXES, -len(w)),
+                )
                 + camel_tokens
                 + suffix_tokens
             )
@@ -195,65 +228,58 @@ class NetboxInventoryUpdater:
 
             for query in unique_candidates:
                 results = self.netbox_connection.send_request(
-                    url=url, method='GET',
-                    params={'q': query}
-                )['results']
+                    url=url, method="GET", params={"q": query}
+                )["results"]
 
                 if len(results) == 1:
-                    logging.debug(
+                    logger.debug(
                         "  Netbox %s: Matched manufacturer '%s' using query '%s'.",
-                        self.device_name, manufacturer, query
+                        self.device_name,
+                        manufacturer,
+                        query,
                     )
-                    return results[0]['id']
+                    return results[0]["id"]
 
                 if len(results) > 1:
-                    logging.error(
+                    logger.error(
                         "  Netbox %s: More than one manufacturer found with query '%s'!",
-                        self.device_name, query
+                        self.device_name,
+                        query,
                     )
-                    return results[0]['id']
+                    return results[0]["id"]
 
-            logging.warning(
+            logger.warning(
                 "  Netbox %s: No manufacturer found for '%s'%s! "
                 "You should consider creating it in Netbox.",
                 self.device_name,
                 clean,
-                f" (item: {item_name})" if item_name else ""
+                f" (item: {item_name})" if item_name else "",
             )
 
         device = self.get_device()
-        server_manufacturer = device['device_type']['manufacturer']['id']
+        server_manufacturer = device["device_type"]["manufacturer"]["id"]
         return server_manufacturer
 
     def get_device(self):
         """
         Get a device info from Netbox API
         """
-        netbox_device = []
-
         url = self.netbox_connection.netbox_devices_url
 
-        params = {
-            'name': self.device_name,
-            'exclude': 'config_context'
-        }
+        params = {"name": self.device_name, "exclude": "config_context"}
         results = self.netbox_connection.send_request(
-            url=url,
-            method='GET',
-            params=params
-        )['results']
+            url=url, method="GET", params=params
+        )["results"]
 
         if len(results) == 0:
-            logging.error("  Netbox %s: No such device found!", self.device_name)
-            return netbox_device
+            logger.error("  Netbox %s: No such device found!", self.device_name)
+            return {}
 
         if len(results) > 1:
-            logging.error("  Netbox %s: More than one device found!", self.device_name)
-            return netbox_device
+            logger.error("  Netbox %s: More than one device found!", self.device_name)
+            return {}
 
-        netbox_device = results[0]
-
-        return netbox_device
+        return results[0]
 
     def get_device_model(self):
         """
@@ -264,8 +290,8 @@ class NetboxInventoryUpdater:
 
         netbox_device = self.get_device()
         if netbox_device:
-            manufacturer = netbox_device['device_type']['manufacturer']['name']
-            model = netbox_device['device_type']['model']
+            manufacturer = netbox_device["device_type"]["manufacturer"]["name"]
+            model = netbox_device["device_type"]["model"]
         return manufacturer, model
 
     def get_device_id(self):
@@ -273,34 +299,32 @@ class NetboxInventoryUpdater:
         Get the device id from Netbox API
         """
         netbox_device = self.get_device()
-        return netbox_device['id']
+        return netbox_device["id"]
 
     def get_device_status(self):
         """
         Get the device status from Netbox API
         """
         netbox_device = self.get_device()
-        return netbox_device['status']['value']
+        return netbox_device["status"]["value"]
 
     def get_device_region(self):
         """
         Get the device region from Netbox API
         """
         netbox_device = self.get_device()
-        matches = re.match(r'^(\w{2}-\w{2}-\d{1})[a-z]$', netbox_device['site']['slug'])
-        return matches[1]
+        matches = re.match(r"^(\w{2}-\w{2}-\d{1})[a-z]$", netbox_device["site"]["slug"])
+        return matches[1] if matches else ""
 
     def get_inventory(self):
         """
         Get the device's inventory from Netbox API
         """
         url = self.netbox_connection.netbox_inventory_items_url
-        params = {'device': self.device_name}
+        params = {"device": self.device_name}
         results = self.netbox_connection.send_request(
-            url=url,
-            method='GET',
-            params=params
-        )['results']
+            url=url, method="GET", params=params
+        )["results"]
         return results
 
     def remove_inventory_item(self, item):
@@ -308,9 +332,9 @@ class NetboxInventoryUpdater:
         Remove an inventory item from a device in Netbox
         """
 
-        url = item['url']
-        logging.info("  Netbox %s: Deleting item %s", self.device_name, item['name'])
-        self.netbox_connection.send_request(url, 'DELETE')
+        url = item["url"]
+        logger.info("  Netbox %s: Deleting item %s", self.device_name, item["name"])
+        self.netbox_connection.send_request(url, "DELETE")
 
     def add_inventory_item(self, item):
         """
@@ -318,7 +342,7 @@ class NetboxInventoryUpdater:
         """
 
         url = self.netbox_connection.netbox_inventory_items_url
-        self.netbox_connection.send_request(url, 'POST', data=item)
+        self.netbox_connection.send_request(url, "POST", data=item)
 
     def update_inventory_item(self, item, item_id):
         """
@@ -326,7 +350,7 @@ class NetboxInventoryUpdater:
         """
 
         url = self.netbox_connection.netbox_inventory_items_url + f"{item_id}/"
-        self.netbox_connection.send_request(url, 'PATCH', data=item)
+        self.netbox_connection.send_request(url, "PATCH", data=item)
 
     def _convert_netbox_inventory(self, item):
         """
@@ -334,12 +358,14 @@ class NetboxInventoryUpdater:
         """
         if item:
             converted_item = {
-                'manufacturer': item['manufacturer'].get('id') if item['manufacturer'] else "",
-                'description': item['description'],
-                'name': item['name'],
-                'device': item['device']['id'],
-                'part_id': item['part_id'],
-                'serial': item['serial']
+                "manufacturer": item["manufacturer"].get("id")
+                if item["manufacturer"]
+                else "",
+                "description": item["description"],
+                "name": item["name"],
+                "device": item["device"]["id"],
+                "part_id": item["part_id"],
+                "serial": item["serial"],
             }
         else:
             converted_item = {}
@@ -351,21 +377,26 @@ class NetboxInventoryUpdater:
         Check if the amount of items found matches the amount of inventory items in Netbox
         """
         if len(netbox_inventory) > len(server_inventory) and len(netbox_inventory) > 0:
-            logging.info(
-                "  Netbox %s: "
-                "Number of Netbox entries for %s doesn't match:",
+            logger.info(
+                "  Netbox %s: Number of Netbox entries for %s doesn't match:",
                 self.device_name,
-                netbox_inventory[0]['name']
+                netbox_inventory[0]["name"],
             )
-            logging.info("  Netbox %s: Netbox: %s", self.device_name, len(netbox_inventory))
-            logging.info("  Netbox %s: Server: %s", self.device_name, len(server_inventory))
-            logging.info("  Netbox %s: Removing entries ...", self.device_name)
+            logger.info(
+                "  Netbox %s: Netbox: %s", self.device_name, len(netbox_inventory)
+            )
+            logger.info(
+                "  Netbox %s: Server: %s", self.device_name, len(server_inventory)
+            )
+            logger.info("  Netbox %s: Removing entries ...", self.device_name)
             for index in range(len(netbox_inventory) - len(server_inventory)):
                 self.remove_inventory_item(netbox_inventory[index])
                 netbox_inventory.pop(index)
         return netbox_inventory
 
-    def _update_inventory_items(self, netbox_device_id, server_inventory, netbox_inventory):
+    def _update_inventory_items(
+        self, netbox_device_id, server_inventory, netbox_inventory
+    ):
         """
         Update inventory items in Netbox.
 
@@ -379,7 +410,7 @@ class NetboxInventoryUpdater:
         # Build a lookup of unmatched Netbox items by serial for fast serial matching.
         netbox_by_serial = {}
         for nb_item in netbox_inventory:
-            s = (nb_item.get('serial') or '').strip()
+            s = (nb_item.get("serial") or "").strip()
             if s:
                 netbox_by_serial[s] = nb_item
 
@@ -389,195 +420,210 @@ class NetboxInventoryUpdater:
         # For positional fallback: group Netbox items by name.
         netbox_by_name = defaultdict(list)
         for nb_item in netbox_inventory:
-            netbox_by_name[nb_item.get('name', '')].append(nb_item)
+            netbox_by_name[nb_item.get("name", "")].append(nb_item)
 
         for item in server_inventory:
-            description = item.get('Description', None)
+            description = item.get("Description", None)
             if description is None:
-                if item.get('Name') in ['Network Adapter View', 'Adapter']:
-                    description = item.get('Model', "")
+                if item.get("Name") in ["Network Adapter View", "Adapter"]:
+                    description = item.get("Model", "")
                 else:
-                    description = item.get('Name', "")
+                    description = item.get("Name", "")
 
             new_netbox_item = {
-                'manufacturer': self.get_manufacturer_id(item['Manufacturer'], item.get('NetboxName')),
-                'description': description,
-                'name': item.get('NetboxName', ""),
-                'device': netbox_device_id,
-                'part_id': item.get('PartNumber', item.get('Model', "")),
-                'serial': item.get('SerialNumber', "")
+                "manufacturer": self.get_manufacturer_id(
+                    item["Manufacturer"], item.get("NetboxName")
+                ),
+                "description": description,
+                "name": item.get("NetboxName", ""),
+                "device": netbox_device_id,
+                "part_id": item.get("PartNumber", item.get("Model", "")),
+                "serial": item.get("SerialNumber", ""),
             }
 
-            server_serial = (new_netbox_item['serial'] or '').strip()
+            server_serial = (new_netbox_item["serial"] or "").strip()
             current_netbox_item = None
 
             # 1. Try serial match.
             if server_serial and server_serial in netbox_by_serial:
                 candidate = netbox_by_serial[server_serial]
-                if candidate['id'] not in matched_netbox_ids:
+                if candidate["id"] not in matched_netbox_ids:
                     current_netbox_item = candidate
 
             # 2. Positional fallback within same name group.
             if current_netbox_item is None:
                 candidates = [
-                    nb for nb in netbox_by_name.get(new_netbox_item['name'], [])
-                    if nb['id'] not in matched_netbox_ids
+                    nb
+                    for nb in netbox_by_name.get(new_netbox_item["name"], [])
+                    if nb["id"] not in matched_netbox_ids
                 ]
                 if candidates:
                     current_netbox_item = candidates[0]
 
             if current_netbox_item:
-                matched_netbox_ids.add(current_netbox_item['id'])
+                matched_netbox_ids.add(current_netbox_item["id"])
 
-            old_netbox_item_json = json.dumps(self._convert_netbox_inventory(current_netbox_item or []))
+            old_netbox_item_json = json.dumps(
+                self._convert_netbox_inventory(current_netbox_item or [])
+            )
             new_netbox_item_json = json.dumps(new_netbox_item).replace("null", '""')
 
             if new_netbox_item_json == old_netbox_item_json:
-                logging.info(
+                logger.info(
                     "  Netbox %s: No change for %s",
                     self.device_name,
-                    new_netbox_item['name']
+                    new_netbox_item["name"],
                 )
             else:
                 if current_netbox_item:
                     old = json.loads(old_netbox_item_json)
-                    new = json.loads(new_netbox_item_json.replace('""', 'null'))
+                    new = json.loads(new_netbox_item_json.replace('""', "null"))
                     changed_fields = {
-                        k: {'old': old.get(k), 'new': new.get(k)}
+                        k: {"old": old.get(k), "new": new.get(k)}
                         for k in new
                         if str(old.get(k)) != str(new.get(k))
                     }
-                    if 'manufacturer' in changed_fields:
-                        old_mfr = current_netbox_item.get('manufacturer') or {}
-                        changed_fields['manufacturer'] = {
-                            'old': old_mfr.get('name', old.get('manufacturer')),
-                            'new': item.get('Manufacturer', new.get('manufacturer'))
+                    if "manufacturer" in changed_fields:
+                        old_mfr = current_netbox_item.get("manufacturer") or {}
+                        changed_fields["manufacturer"] = {
+                            "old": old_mfr.get("name", old.get("manufacturer")),
+                            "new": item.get("Manufacturer", new.get("manufacturer")),
                         }
-                    logging.info(
+                    logger.info(
                         "  Netbox %s: Updating item %s - changed: %s",
                         self.device_name,
-                        new_netbox_item['name'],
-                        changed_fields
+                        new_netbox_item["name"],
+                        changed_fields,
                     )
-                    self.update_inventory_item(new_netbox_item_json, current_netbox_item['id'])
+                    self.update_inventory_item(
+                        new_netbox_item_json, current_netbox_item["id"]
+                    )
                 else:
-                    logging.info(
+                    logger.info(
                         "  Netbox %s: Adding item %s",
                         self.device_name,
-                        new_netbox_item['name']
+                        new_netbox_item["name"],
                     )
                     self.add_inventory_item(new_netbox_item_json)
 
         for nb_item in netbox_inventory:
-            if nb_item['id'] not in matched_netbox_ids:
-                logging.info(
+            if nb_item["id"] not in matched_netbox_ids:
+                logger.info(
                     "  Netbox %s: Removing stale item %s",
                     self.device_name,
-                    nb_item['name']
+                    nb_item["name"],
                 )
                 self.remove_inventory_item(nb_item)
 
     def update_device_inventory_and_mac_serial(self, inventory):
         """
         Unified method to update both inventory items AND MAC/serial data.
-        
+
         Args:
             inventory: Device inventory from redfish_collector
                        (includes 'mac_serial_data' key if available)
         """
         # UPDATE INVENTORY ITEMS (existing functionality)
         self.update_device_inventory(inventory)
-        
+
         # UPDATE MAC/SERIAL IF PROVIDED (new functionality)
-        mac_serial_data = inventory.get('mac_serial_data')
+        mac_serial_data = inventory.get("mac_serial_data")
         if mac_serial_data:
             try:
                 device = self.get_device()
                 if not device:
-                    logging.warning("  Netbox %s: Could not get device info", self.device_name)
+                    logger.warning(
+                        "  Netbox %s: Could not get device info", self.device_name
+                    )
                     return
-                
+
                 # Update device serial number
-                if mac_serial_data.get('serial'):
-                    self._update_device_serial(device, mac_serial_data['serial'])
-                
+                if mac_serial_data.get("serial"):
+                    self._update_device_serial(device, mac_serial_data["serial"])
+
                 # Update interface MAC addresses
-                if mac_serial_data.get('macs'):
-                    self._update_interface_macs(device, mac_serial_data['macs'])
-                    
-            except Exception as err:
-                logging.warning(
+                if mac_serial_data.get("macs"):
+                    self._update_interface_macs(device, mac_serial_data["macs"])
+
+            except (NetboxConnectionException, KeyError, ValueError) as err:
+                logger.warning(
                     "  Netbox %s: Failed to update MAC/serial data: %s",
-                    self.device_name, err
+                    self.device_name,
+                    err,
                 )
                 # Non-fatal error - don't fail the entire operation
 
     def _update_device_serial(self, device, serial_number):
         """Update device serial number if it differs from Netbox."""
         # Normalize both serials by stripping whitespace for comparison
-        current_serial = str(device.get('serial', '')).strip()
+        current_serial = str(device.get("serial", "")).strip()
         new_serial = str(serial_number).strip()
-        
+
         if current_serial == new_serial:
-            logging.info("  Netbox %s: Serial number already current", self.device_name)
+            logger.info("  Netbox %s: Serial number already current", self.device_name)
             return
-        
+
         url = f"{self.netbox_connection.netbox_devices_url}{device['id']}/"
         payload = json.dumps({"serial": serial_number})
-        
+
         try:
-            self.netbox_connection.send_request(url, 'PATCH', data=payload)
-            logging.info(
-                "  Netbox %s: Updated serial to %s",
-                self.device_name, serial_number
+            self.netbox_connection.send_request(url, "PATCH", data=payload)
+            logger.info(
+                "  Netbox %s: Updated serial to %s", self.device_name, serial_number
             )
-        except Exception as err:
-            logging.warning(
-                "  Netbox %s: Failed to update serial: %s",
-                self.device_name, err
+        except NetboxConnectionException as err:
+            logger.warning(
+                "  Netbox %s: Failed to update serial: %s", self.device_name, err
             )
 
-    _SPEED_TO_INTERFACE_TYPE = {
-        1:   '1000base-t',
-        10:  '10gbase-x-sfpp',
-        25:  '25gbase-x-sfp28',
-        40:  '40gbase-x-qsfpp',
-        100: '100gbase-x-qsfp28',
-        200: '100gbase-x-qsfp28',  # reported as 200G but port runs at 100G (e.g. ConnectX-6 Dx)
-        400: '400gbase-x-qsfpdd',
+    _SPEED_TO_INTERFACE_TYPE: ClassVar[dict[int, str]] = {
+        1: "1000base-t",
+        10: "10gbase-x-sfpp",
+        25: "25gbase-x-sfp28",
+        40: "40gbase-x-qsfpp",
+        100: "100gbase-x-qsfp28",
+        200: "100gbase-x-qsfp28",  # reported as 200G but port runs at 100G (e.g. ConnectX-6 Dx)
+        400: "400gbase-x-qsfpdd",
     }
 
     # Reverse map: Netbox interface type value → speed in Gbps.
-    _INTERFACE_TYPE_TO_SPEED = {
-        '1000base-t':        1,
-        '10gbase-x-sfpp':    10,
-        '25gbase-x-sfp28':   25,
-        '40gbase-x-qsfpp':   40,
-        '100gbase-x-qsfp28': 100,
-        '400gbase-x-qsfpdd': 400,
+    _INTERFACE_TYPE_TO_SPEED: ClassVar[dict[str, int]] = {
+        "1000base-t": 1,
+        "10gbase-x-sfpp": 10,
+        "25gbase-x-sfp28": 25,
+        "40gbase-x-qsfpp": 40,
+        "100gbase-x-qsfp28": 100,
+        "400gbase-x-qsfpdd": 400,
     }
 
     def _create_interface(self, device_id, name, mac, speed_gbps):
         """Create a missing interface in Netbox with the given name, type and MAC."""
         iface_type = self._SPEED_TO_INTERFACE_TYPE.get(int(speed_gbps or 0))
         if not iface_type:
-            logging.debug(
+            logger.debug(
                 "  Netbox %s: No type mapping for %sGbps, skipping creation of %s",
-                self.device_name, speed_gbps, name
+                self.device_name,
+                speed_gbps,
+                name,
             )
             return
-        payload = json.dumps({
-            "device": device_id,
-            "name": name,
-            "type": iface_type,
-            "mac_address": mac,
-            "enabled": True,
-        })
+        payload = json.dumps(
+            {
+                "device": device_id,
+                "name": name,
+                "type": iface_type,
+                "mac_address": mac,
+                "enabled": True,
+            }
+        )
         url = f"{self.netbox_connection.netbox_url}/api/dcim/interfaces/"
-        self.netbox_connection.send_request(url, 'POST', data=payload)
-        logging.info(
+        self.netbox_connection.send_request(url, "POST", data=payload)
+        logger.info(
             "  Netbox %s: Created interface %s (%s) with MAC %s",
-            self.device_name, name, iface_type, mac
+            self.device_name,
+            name,
+            iface_type,
+            mac,
         )
 
     def _update_interface_macs(self, device, macs_dict):
@@ -585,100 +631,113 @@ class NetboxInventoryUpdater:
         try:
             # Fetch device interfaces
             url = f"{self.netbox_connection.netbox_url}/api/dcim/interfaces/"
-            params = {'device_id': device['id']}
-            response = self.netbox_connection.send_request(url, 'GET', params=params)
-            interfaces = response.get('results', [])
-            
+            params = {"device_id": device["id"]}
+            response = self.netbox_connection.send_request(url, "GET", params=params)
+            interfaces = response.get("results", [])
+
             if not interfaces:
-                logging.warning("  Netbox %s: No interfaces found", self.device_name)
+                logger.warning("  Netbox %s: No interfaces found", self.device_name)
                 return
-            
+
             # Update each interface MAC
             for mac_key, mac_info in macs_dict.items():
-                self._update_single_interface_mac(interfaces, mac_key, mac_info, device['id'])
-                
-        except Exception as err:
-            logging.warning(
+                self._update_single_interface_mac(
+                    interfaces, mac_key, mac_info, device["id"]
+                )
+
+        except (NetboxConnectionException, KeyError, ValueError) as err:
+            logger.warning(
                 "  Netbox %s: Failed to update interface MACs: %s",
-                self.device_name, err
+                self.device_name,
+                err,
             )
 
-    def _update_single_interface_mac(self, interfaces, interface_name, mac_info, device_id):
+    def _update_single_interface_mac(
+        self, interfaces, interface_name, mac_info, device_id
+    ):
         """Update a single interface MAC address, creating the interface if missing."""
+
         def normalise(name):
-            return re.sub(r'[-_ ]+', '', name).lower()
+            return re.sub(r"[-_ ]+", "", name).lower()
 
         _BMC_NAMES = self.netbox_connection.bmc_interface_names
 
         # mac_info is {'mac': str, 'speed_gbps': int}
-        raw_mac = mac_info['mac'] if isinstance(mac_info, dict) else mac_info
-        speed_gbps = mac_info.get('speed_gbps', 0) if isinstance(mac_info, dict) else 0
+        raw_mac = mac_info["mac"] if isinstance(mac_info, dict) else mac_info
+        speed_gbps = mac_info.get("speed_gbps", 0) if isinstance(mac_info, dict) else 0
 
         def find_interface():
             # Non-BMC keys: exact name match only.
             if normalise(interface_name) not in _BMC_NAMES:
                 for iface in interfaces:
-                    if normalise(iface['name']) == normalise(interface_name):
+                    if normalise(iface["name"]) == normalise(interface_name):
                         return iface
                 return None
 
             # BMC key: name match is the most reliable indicator.
-            named = [i for i in interfaces if normalise(i['name']) in _BMC_NAMES]
+            named = [i for i in interfaces if normalise(i["name"]) in _BMC_NAMES]
             if len(named) == 1:
                 return named[0]
             if len(named) > 1:
                 # Multiple name matches — also require mgmt_only to narrow down
-                named_mgmt = [i for i in named if i.get('mgmt_only')]
+                named_mgmt = [i for i in named if i.get("mgmt_only")]
                 if len(named_mgmt) == 1:
                     return named_mgmt[0]
 
             # Fall back to mgmt_only flag when name matching is inconclusive.
-            mgmt_interfaces = [i for i in interfaces if i.get('mgmt_only')]
+            mgmt_interfaces = [i for i in interfaces if i.get("mgmt_only")]
             if len(mgmt_interfaces) == 1:
                 return mgmt_interfaces[0]
             if len(mgmt_interfaces) > 1:
                 # Multiple mgmt_only — try name match as tiebreaker.
-                named_mgmt = [i for i in mgmt_interfaces if normalise(i['name']) in _BMC_NAMES]
+                named_mgmt = [
+                    i for i in mgmt_interfaces if normalise(i["name"]) in _BMC_NAMES
+                ]
                 if len(named_mgmt) == 1:
                     return named_mgmt[0]
-                logging.warning(
+                logger.warning(
                     "  Netbox %s: Multiple mgmt_only interfaces found and names are ambiguous, "
                     "skipping remoteboard MAC update",
-                    self.device_name
+                    self.device_name,
                 )
                 return None
 
             # No mgmt_only at all — already handled name match above, nothing found.
-            logging.warning(
+            logger.warning(
                 "  Netbox %s: No interface marked mgmt_only and no known BMC name found",
-                self.device_name
+                self.device_name,
             )
             return None
 
         # Normalise to upper-case colon-separated AA:BB:CC:DD:EE:FF.
-        clean = raw_mac.upper().replace(':', '').replace('-', '')
-        mac_address = ':'.join(clean[i:i+2] for i in range(0, 12, 2))
+        clean = raw_mac.upper().replace(":", "").replace("-", "")
+        mac_address = ":".join(clean[i : i + 2] for i in range(0, 12, 2))
 
         interface = find_interface()
         if interface:
-            if interface.get('mac_address') == mac_address.upper():
-                logging.info(
+            if interface.get("mac_address") == mac_address.upper():
+                logger.info(
                     "  Netbox %s: MAC already current for %s",
-                    self.device_name, interface['name']
+                    self.device_name,
+                    interface["name"],
                 )
                 return
             try:
                 url = f"{self.netbox_connection.netbox_url}/api/dcim/interfaces/{interface['id']}/"
                 payload = json.dumps({"mac_address": mac_address.upper()})
-                self.netbox_connection.send_request(url, 'PATCH', data=payload)
-                logging.info(
+                self.netbox_connection.send_request(url, "PATCH", data=payload)
+                logger.info(
                     "  Netbox %s: Updated %s MAC to %s",
-                    self.device_name, interface['name'], mac_address
+                    self.device_name,
+                    interface["name"],
+                    mac_address,
                 )
-            except Exception as err:
-                logging.warning(
+            except NetboxConnectionException as err:
+                logger.warning(
                     "  Netbox %s: Failed to update MAC for %s: %s",
-                    self.device_name, interface['name'], err
+                    self.device_name,
+                    interface["name"],
+                    err,
                 )
             return
 
@@ -686,42 +745,59 @@ class NetboxInventoryUpdater:
         if self.netbox_connection.create_missing_interfaces:
             # When speed is unknown, try to infer from a sibling interface of the same group.
             if not speed_gbps:
-                lom_match = re.match(r'^(L)\d+$', interface_name)
-                nic_match = re.match(r'^(NIC\d+)_Port\d+$', interface_name)
-                prefix = (lom_match or nic_match)
+                lom_match = re.match(r"^(L)\d+$", interface_name)
+                nic_match = re.match(r"^(NIC\d+)_Port\d+$", interface_name)
+                prefix = lom_match or nic_match
                 if prefix:
                     grp = prefix.group(1)
-                    logging.debug(
+                    logger.debug(
                         "  Netbox %s: Looking for sibling of %s (group=%s) in %d interfaces",
-                        self.device_name, interface_name, grp, len(interfaces)
+                        self.device_name,
+                        interface_name,
+                        grp,
+                        len(interfaces),
                     )
                     for iface in interfaces:
-                        iname = iface.get('name', '')
-                        itype_raw = iface.get('type')
+                        iname = iface.get("name", "")
+                        itype_raw = iface.get("type")
                         if iname.startswith(grp) and itype_raw:
-                            itype = itype_raw.get('value') if isinstance(itype_raw, dict) else itype_raw
+                            itype: str = (
+                                itype_raw.get("value")
+                                if isinstance(itype_raw, dict)
+                                else itype_raw
+                            ) or ""
                             speed_gbps = self._INTERFACE_TYPE_TO_SPEED.get(itype, 0)
-                            logging.debug(
+                            logger.debug(
                                 "  Netbox %s: Sibling candidate %s type=%s speed=%s",
-                                self.device_name, iname, itype, speed_gbps
+                                self.device_name,
+                                iname,
+                                itype,
+                                speed_gbps,
                             )
                             if speed_gbps:
-                                logging.debug(
+                                logger.debug(
                                     "  Netbox %s: Inferred speed %sGbps for %s from sibling %s",
-                                    self.device_name, speed_gbps, interface_name, iname
+                                    self.device_name,
+                                    speed_gbps,
+                                    interface_name,
+                                    iname,
                                 )
                                 break
             if speed_gbps:
-                self._create_interface(device_id, interface_name, mac_address, speed_gbps)
+                self._create_interface(
+                    device_id, interface_name, mac_address, speed_gbps
+                )
             else:
-                logging.debug(
+                logger.debug(
                     "  Netbox %s: Interface %s not found in Netbox (speed unknown, cannot create)",
-                    self.device_name, interface_name
+                    self.device_name,
+                    interface_name,
                 )
         else:
-            logging.debug(
+            logger.debug(
                 "  Netbox %s: Interface %s not found in Netbox",
-                self.device_name, interface_name
+                self.device_name,
+                interface_name,
             )
 
     def filter_items(self, inventory_items, filter_string):
@@ -730,9 +806,9 @@ class NetboxInventoryUpdater:
         """
 
         filtered_items = []
-        expression = r'.*(' + filter_string + ').*'
+        expression = r".*(" + filter_string + ").*"
         for item in inventory_items:
-            if re.match(expression, item['name'], re.IGNORECASE):
+            if re.match(expression, item["name"], re.IGNORECASE):
                 filtered_items.append(item)
 
         return filtered_items
@@ -746,33 +822,32 @@ class NetboxInventoryUpdater:
         netbox_inventory = self.get_inventory()
 
         # Processor
-        if server_inventory.get('Processors'):
-            server_inventory_processors = server_inventory['Processors']
+        if server_inventory.get("Processors"):
+            server_inventory_processors = server_inventory["Processors"]
             netbox_inventory_processors = self.filter_items(netbox_inventory, "CPU")
             netbox_inventory_processors = self._check_item_amount(
-                server_inventory_processors,
-                netbox_inventory_processors
+                server_inventory_processors, netbox_inventory_processors
             )
 
             self._update_inventory_items(
-                netbox_device_id = netbox_device_id,
-                server_inventory = server_inventory_processors,
-                netbox_inventory = netbox_inventory_processors
+                netbox_device_id=netbox_device_id,
+                server_inventory=server_inventory_processors,
+                netbox_inventory=netbox_inventory_processors,
             )
 
         # Memory
         # We only write one Entry for all DIMMs with the total RAM capacity in the name
-        if server_inventory.get('Memory'):
-            server_inventory_memory = [server_inventory['Memory'][0]]
+        if server_inventory.get("Memory"):
+            server_inventory_memory = [server_inventory["Memory"][0]]
 
-            dimm_capacity = round(int(server_inventory_memory[0]['CapacityMiB'])/1024)
-            dimm_type = server_inventory_memory[0]['MemoryDeviceType']
-            dimm_speed = server_inventory_memory[0]['OperatingSpeedMhz']
-            dimm_manufacturer = server_inventory_memory[0]['Manufacturer']
-            num_dimms = len(server_inventory['Memory'])
+            dimm_capacity = round(int(server_inventory_memory[0]["CapacityMiB"]) / 1024)
+            dimm_type = server_inventory_memory[0]["MemoryDeviceType"]
+            dimm_speed = server_inventory_memory[0]["OperatingSpeedMhz"]
+            dimm_manufacturer = server_inventory_memory[0]["Manufacturer"]
+            num_dimms = len(server_inventory["Memory"])
 
             # Put the description together from several parts of the DIMM information
-            server_inventory_memory[0]['Description'] = (
+            server_inventory_memory[0]["Description"] = (
                 f"{num_dimms}x "
                 f"{dimm_capacity}GB "
                 f"{dimm_type} "
@@ -781,14 +856,13 @@ class NetboxInventoryUpdater:
             )
             netbox_inventory_memory = self.filter_items(netbox_inventory, "RAM")
             netbox_inventory_memory = self._check_item_amount(
-                server_inventory_memory,
-                netbox_inventory_memory
+                server_inventory_memory, netbox_inventory_memory
             )
 
             self._update_inventory_items(
-                netbox_device_id = netbox_device_id,
-                server_inventory = server_inventory_memory,
-                netbox_inventory = netbox_inventory_memory
+                netbox_device_id=netbox_device_id,
+                server_inventory=server_inventory_memory,
+                netbox_inventory=netbox_inventory_memory,
             )
 
         # PCIeDevices
@@ -796,161 +870,152 @@ class NetboxInventoryUpdater:
         server_inventory_nics = []
         server_inventory_gpus = []
 
-        if server_inventory.get('NetworkAdapters'):
-            server_inventory_nics = server_inventory['NetworkAdapters']
+        if server_inventory.get("NetworkAdapters"):
+            server_inventory_nics = server_inventory["NetworkAdapters"]
 
-        pcidevices = server_inventory.get('PCIeDevices', server_inventory.get('PCIDevices'))
+        pcidevices = server_inventory.get(
+            "PCIeDevices", server_inventory.get("PCIDevices")
+        )
         if pcidevices:
-
             if not server_inventory_nics:
                 # filter the NICs
                 for item in pcidevices:
-                    if re.match("NIC.*", item.get('NetboxName', ""), re.IGNORECASE):
+                    if re.match("NIC.*", item.get("NetboxName", ""), re.IGNORECASE):
                         server_inventory_nics.append(item)
 
             # filter the onboard GPUs
             for item in pcidevices:
                 if re.match(
-                    "GPU",
-                    item.get('NetboxName', ""),
-                    re.IGNORECASE
+                    "GPU", item.get("NetboxName", ""), re.IGNORECASE
                 ) and not re.match(
-                    "(Embedded|Integrated).*",
-                    item['Name'],
-                    re.IGNORECASE):
-
+                    "(Embedded|Integrated).*", item["Name"], re.IGNORECASE
+                ):
                     server_inventory_gpus.append(item)
 
         # NetworkAdapters
         if server_inventory_nics:
             netbox_inventory_nics = self.filter_items(
-                netbox_inventory,
-                "NIC|DPU|Mellanox|Broadcom|Intel|Pensando|Nvidia"
+                netbox_inventory, "NIC|DPU|Mellanox|Broadcom|Intel|Pensando|Nvidia"
             )
 
             netbox_inventory_nics = self._check_item_amount(
-                server_inventory_nics,
-                netbox_inventory_nics
+                server_inventory_nics, netbox_inventory_nics
             )
 
             self._update_inventory_items(
-                netbox_device_id = netbox_device_id,
-                server_inventory = server_inventory_nics,
-                netbox_inventory = netbox_inventory_nics
+                netbox_device_id=netbox_device_id,
+                server_inventory=server_inventory_nics,
+                netbox_inventory=netbox_inventory_nics,
             )
 
         # GPUs
         if server_inventory_gpus:
             netbox_inventory_gpus = self.filter_items(netbox_inventory, "GPU")
             netbox_inventory_gpus = self._check_item_amount(
-                server_inventory_gpus,
-                netbox_inventory_gpus
+                server_inventory_gpus, netbox_inventory_gpus
             )
 
             self._update_inventory_items(
-                netbox_device_id = netbox_device_id,
-                server_inventory = server_inventory_gpus,
-                netbox_inventory = netbox_inventory_gpus
+                netbox_device_id=netbox_device_id,
+                server_inventory=server_inventory_gpus,
+                netbox_inventory=netbox_inventory_gpus,
             )
 
         # Drives
-        if server_inventory.get('Drives'):
-
+        if server_inventory.get("Drives"):
             # SSD
             server_inventory_ssd = []
-            for item in server_inventory['Drives']:
-                if (item['Protocol'] == "SATA" or
-                    item['Protocol'] == "SAS") and item['MediaType'] == "SSD":
+            for item in server_inventory["Drives"]:
+                if (item["Protocol"] == "SATA" or item["Protocol"] == "SAS") and item[
+                    "MediaType"
+                ] == "SSD":
                     server_inventory_ssd.append(item)
 
             if server_inventory_ssd:
                 netbox_inventory_ssd = self.filter_items(netbox_inventory, "FLASH|SSD")
                 netbox_inventory_ssd = self._check_item_amount(
-                    server_inventory_ssd,
-                    netbox_inventory_ssd
+                    server_inventory_ssd, netbox_inventory_ssd
                 )
 
                 self._update_inventory_items(
-                    netbox_device_id = netbox_device_id,
-                    server_inventory = server_inventory_ssd,
-                    netbox_inventory = netbox_inventory_ssd
+                    netbox_device_id=netbox_device_id,
+                    server_inventory=server_inventory_ssd,
+                    netbox_inventory=netbox_inventory_ssd,
                 )
 
             # NVME
             server_inventory_nvme = []
-            for item in server_inventory['Drives']:
-                if (item['Protocol'] == "PCIe" or
-                    item['Protocol'] == "NVMe") and item['MediaType'] == "SSD":
+            for item in server_inventory["Drives"]:
+                if (item["Protocol"] == "PCIe" or item["Protocol"] == "NVMe") and item[
+                    "MediaType"
+                ] == "SSD":
                     server_inventory_nvme.append(item)
 
             if server_inventory_nvme:
-                netbox_inventory_nvme = self.filter_items(netbox_inventory, "NVME|FLASH")
+                netbox_inventory_nvme = self.filter_items(
+                    netbox_inventory, "NVME|FLASH"
+                )
                 netbox_inventory_nvme = self._check_item_amount(
-                    server_inventory_nvme,
-                    netbox_inventory_nvme
+                    server_inventory_nvme, netbox_inventory_nvme
                 )
 
                 self._update_inventory_items(
-                    netbox_device_id = netbox_device_id,
-                    server_inventory = server_inventory_nvme,
-                    netbox_inventory = netbox_inventory_nvme
+                    netbox_device_id=netbox_device_id,
+                    server_inventory=server_inventory_nvme,
+                    netbox_inventory=netbox_inventory_nvme,
                 )
 
             # HDD
             server_inventory_hdd = []
-            for item in server_inventory['Drives']:
-                if item['Protocol'] == "SAS" and item['MediaType'] == "HDD":
+            for item in server_inventory["Drives"]:
+                if item["Protocol"] == "SAS" and item["MediaType"] == "HDD":
                     server_inventory_hdd.append(item)
 
             if server_inventory_hdd:
                 netbox_inventory_hdd = self.filter_items(netbox_inventory, "HDD")
                 netbox_inventory_hdd = self._check_item_amount(
-                    server_inventory_hdd,
-                    netbox_inventory_hdd
+                    server_inventory_hdd, netbox_inventory_hdd
                 )
 
                 self._update_inventory_items(
-                    netbox_device_id = netbox_device_id,
-                    server_inventory = server_inventory_hdd,
-                    netbox_inventory = netbox_inventory_hdd
+                    netbox_device_id=netbox_device_id,
+                    server_inventory=server_inventory_hdd,
+                    netbox_inventory=netbox_inventory_hdd,
                 )
 
         # Controllers
-        if server_inventory.get('Controllers'):
-
+        if server_inventory.get("Controllers"):
             # only get controllers that actually have disk drives attached
             server_inventory_controller = []
-            for item in server_inventory['Controllers']:
-                if item.get('DrivesAttached'):
+            for item in server_inventory["Controllers"]:
+                if item.get("DrivesAttached"):
                     server_inventory_controller.append(item)
 
             if server_inventory_controller:
-                netbox_inventory_controller = self.filter_items(netbox_inventory, "RAID")
+                netbox_inventory_controller = self.filter_items(
+                    netbox_inventory, "RAID"
+                )
                 netbox_inventory_controller = self._check_item_amount(
-                    server_inventory_controller,
-                    netbox_inventory_controller
+                    server_inventory_controller, netbox_inventory_controller
                 )
 
                 self._update_inventory_items(
-                    netbox_device_id = netbox_device_id,
-                    server_inventory = server_inventory_controller,
-                    netbox_inventory = netbox_inventory_controller
+                    netbox_device_id=netbox_device_id,
+                    server_inventory=server_inventory_controller,
+                    netbox_inventory=netbox_inventory_controller,
                 )
 
         # Trusted Platform Modules
-        if server_inventory.get('TrustedModules'):
-
-            server_inventory_tpm = server_inventory['TrustedModules']
+        if server_inventory.get("TrustedModules"):
+            server_inventory_tpm = server_inventory["TrustedModules"]
 
             netbox_inventory_tpm = self.filter_items(netbox_inventory, "TPM")
             netbox_inventory_tpm = self._check_item_amount(
-                server_inventory_tpm,
-                netbox_inventory_tpm
+                server_inventory_tpm, netbox_inventory_tpm
             )
 
             self._update_inventory_items(
-                netbox_device_id = netbox_device_id,
-                server_inventory = server_inventory_tpm,
-                netbox_inventory = netbox_inventory_tpm
+                netbox_device_id=netbox_device_id,
+                server_inventory=server_inventory_tpm,
+                netbox_inventory=netbox_inventory_tpm,
             )
-

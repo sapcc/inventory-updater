@@ -1,21 +1,26 @@
-"""
+﻿"""
 Module for handling the requests and responses.
 """
+
+import json
 import logging
-import socket
-import re
 import os
+import re
+import socket
 import sys
 import time
 import traceback
-import json
+
 import falcon
 import requests
 
-from redfish_collector import RedfishIventoryCollector, CollectorException
 from netbox import NetboxInventoryUpdater
+from redfish_collector import CollectorException, RedfishIventoryCollector
+
+logger = logging.getLogger(__name__)
 
 # pylint: disable=no-member
+
 
 class WelcomePage:  # pylint: disable=too-few-public-methods
     """
@@ -27,7 +32,7 @@ class WelcomePage:  # pylint: disable=too-few-public-methods
         Define the GET method for the API.
         """
         resp.status = falcon.HTTP_200
-        resp.content_type = 'text/html'
+        resp.content_type = "text/html"
         resp.text = """<!DOCTYPE html>
 <html>
 <head>
@@ -79,6 +84,7 @@ GET /inventory?target=10.0.0.1</pre>
 </body>
 </html>"""
 
+
 class HandlerException(Exception):
     """
     Exception class for the handler.
@@ -89,20 +95,20 @@ class InventoryCollector:
     """
     Inventory Collector class.
     """
+
     def __init__(self, config, netbox_connection):
         self.config = config
         self.netbox_connection = netbox_connection
-        self.usr = os.getenv("REDFISH_USERNAME", self.config.get('redfish_username'))
-        self.pwd = os.getenv("REDFISH_PASSWORD", self.config.get('redfish_password'))
+        self.usr = os.getenv("REDFISH_USERNAME", self.config.get("redfish_username"))
+        self.pwd = os.getenv("REDFISH_PASSWORD", self.config.get("redfish_password"))
 
         if not self.usr:
-            logging.error("No REDFISH_USERNAME found in environment or config file")
+            logger.error("No REDFISH_USERNAME found in environment or config file")
             sys.exit(1)
 
         if not self.pwd:
-            logging.error("No REDFISH_PASSWORD found in environment or config file")
+            logger.error("No REDFISH_PASSWORD found in environment or config file")
             sys.exit(1)
-
 
     def on_get(self, req, resp):  # pylint: disable=too-many-locals
         """
@@ -110,10 +116,10 @@ class InventoryCollector:
         """
         target = req.get_param("target")
         if not target:
-            logging.error("No target parameter provided!")
+            logger.error("No target parameter provided!")
             raise falcon.HTTPMissingParam("target")
 
-        logging.info("Received Target: %s", target)
+        logger.info("Received Target: %s", target)
         ip_re = re.compile(
             r"^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}"
             r"([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$"
@@ -121,48 +127,58 @@ class InventoryCollector:
 
         bmc_ip = None
         if ip_re.match(target):
-            logging.info("Target %s: Target is an IP Address.", target)
+            logger.info("Target %s: Target is an IP Address.", target)
             try:
                 host = socket.gethostbyaddr(target)[0]
                 if host:
-                    server_pattern = re.compile(r"^([a-z]+\d{2,3})r-([a-z]{2,3}\d{3})(\..+)$")
+                    server_pattern = re.compile(
+                        r"^([a-z]+\d{2,3})r-([a-z]{2,3}\d{3})(\..+)$"
+                    )
                     matches = re.match(server_pattern, host)
                     if matches:
                         node, pod, suffix = matches.groups()
                         bmc_ip = target
                         target = node + "-" + pod + suffix
-                        logging.info(
+                        logger.info(
                             "Target %s: DNS lookup successful, using IP %s for BMC.",
-                            target, bmc_ip)
+                            target,
+                            bmc_ip,
+                        )
                     else:
-                        logging.warning(
+                        logger.warning(
                             "Target %s: Reverse DNS hostname %s does not match naming convention.",
-                            target, host)
+                            target,
+                            host,
+                        )
             except socket.herror as err:
                 msg = f"Target {target}: Reverse DNS lookup failed: {err}"
-                logging.error(msg)
+                logger.error(msg)
                 raise falcon.HTTPInvalidParam(msg, "target")
 
         start_time = time.time()
         try:
             result = self.process_single_server(target, bmc_ip=bmc_ip)
         except HandlerException as exc:
-            logging.error("A Handler Exception occured: %s", traceback.format_exc())
+            logger.error("A Handler Exception occured: %s", traceback.format_exc())
             raise falcon.HTTPBadRequest(description=str(exc)) from exc
 
         duration = round(time.time() - start_time, 2)
         if result == 0:
             resp.status = falcon.HTTP_200
-            resp.content_type = 'application/json'
-            resp.text = json.dumps({"status": "ok", "target": target, "duration_s": duration})
+            resp.content_type = "application/json"
+            resp.text = json.dumps(
+                {"status": "ok", "target": target, "duration_s": duration}
+            )
         else:
             resp.status = falcon.HTTP_500
-            resp.content_type = 'application/json'
-            resp.text = json.dumps({
-                "status": "error",
-                "target": target,
-                "message": "Failed to collect inventory. Check logs for details.",
-            })
+            resp.content_type = "application/json"
+            resp.text = json.dumps(
+                {
+                    "status": "error",
+                    "target": target,
+                    "message": "Failed to collect inventory. Check logs for details.",
+                }
+            )
 
     def process_single_server(self, server, bmc_ip=None):
         """
@@ -178,43 +194,50 @@ class InventoryCollector:
         """
 
         server_collector = None
-        server_pattern = re.compile(r"^([a-z]+\d{1,3})-([a-z]{2,3}\d{3})(?:-[a-z]+\d+)?(\..+)$")
+        server_pattern = re.compile(
+            r"^([a-z]+\d{1,3})-([a-z]{2,3}\d{3})(-[a-z]+\d+)?(\..+)$"
+        )
 
         matches = re.match(server_pattern, server)
 
         if not matches:
-            logging.warning("  Server %s: Not matching the naming convention, skipping.", server)
+            logger.warning(
+                "  Server %s: Not matching the naming convention, skipping.", server
+            )
             return 1
 
-        node, pod, suffix = matches.groups()
+        node, pod, node_index, suffix = matches.groups()
+        node_index = node_index or ""
 
-        bmc = node + "r-" + pod + suffix
+        bmc = node + "r-" + pod + node_index + suffix
 
         updater = NetboxInventoryUpdater(
-            device_name = node + "-" + pod,
-            netbox_connection = self.netbox_connection
+            device_name=node + "-" + pod + node_index, netbox_connection=self.netbox_connection
         )
 
         manufacturer, model = updater.get_device_model()
-        logging.info("  Server %s: Model: %s %s", server, manufacturer, model)
+        logger.info("  Server %s: Model: %s %s", server, manufacturer, model)
 
         if not manufacturer:
             return 1
 
         inventory = {}
-        logging.info("  Target %s: Collecting inventory using RedFish ...", server)
+        logger.info("  Target %s: Collecting inventory using RedFish ...", server)
 
         try:
             server_collector = RedfishIventoryCollector(
-                timeout           = int(os.getenv('CONNECTION_TIMEOUT',
-                                               self.config.get('connection_timeout', 30))),
-                target            = bmc,
-                label             = server,
-                usr               = self.usr,
-                pwd               = self.pwd,
-                vendor_aliases    = self.netbox_connection.manufacturer_aliases,
-                lom_manufacturers = self.netbox_connection.lom_manufacturers,
-                bmc_ip            = bmc_ip
+                timeout=int(
+                    os.getenv(
+                        "CONNECTION_TIMEOUT", self.config.get("connection_timeout", 30)
+                    )
+                ),
+                target=bmc,
+                label=server,
+                usr=self.usr,
+                pwd=self.pwd,
+                vendor_aliases=self.netbox_connection.manufacturer_aliases,
+                lom_manufacturers=self.netbox_connection.lom_manufacturers,
+                bmc_ip=bmc_ip,
             )
             server_collector.get_session()
 
@@ -224,23 +247,36 @@ class InventoryCollector:
             inventory = server_collector.collect()
 
         except CollectorException as err:
-            logging.error("  Target %s: Error collecting inventory: %s", server, err)
+            logger.error("  Target %s: Error collecting inventory: %s", server, err)
 
-        except (requests.exceptions.RequestException, ConnectionError, TimeoutError) as err:
-            logging.error(
+        except (
+            requests.exceptions.RequestException,
+            ConnectionError,
+            TimeoutError,
+        ) as err:
+            logger.error(
                 "  Target %s: Network error during inventory collection: %s",
-                server, type(err).__name__)
-            raise HandlerException(f"Network error for {server}: {type(err).__name__}") from err
+                server,
+                type(err).__name__,
+            )
+            raise HandlerException(
+                f"Network error for {server}: {type(err).__name__}"
+            ) from err
 
         except (KeyError, ValueError, TypeError) as err:
-            logging.error(
-                "  Target %s: Data parsing error during inventory collection: %s", server, err)
+            logger.error(
+                "  Target %s: Data parsing error during inventory collection: %s",
+                server,
+                err,
+            )
             raise HandlerException(f"Data parsing error for {server}: {err}") from err
 
         except Exception as err:
-            logging.error(
+            logger.error(
                 "  Target %s: Unexpected error during inventory collection: %s",
-                server, type(err).__name__)
+                server,
+                type(err).__name__,
+            )
             raise HandlerException(traceback.format_exc()) from err
 
         finally:
@@ -248,8 +284,9 @@ class InventoryCollector:
                 if server_collector:
                     server_collector.close_session()
             except (requests.exceptions.RequestException, ConnectionError) as err:
-                logging.warning(
-                    "  Target %s: Error closing session: %s", server, type(err).__name__)
+                logger.warning(
+                    "  Target %s: Error closing session: %s", server, type(err).__name__
+                )
 
         if inventory:
             # Updating Netbox inventory
@@ -262,4 +299,3 @@ class InventoryCollector:
             return 0
 
         return 1
-            

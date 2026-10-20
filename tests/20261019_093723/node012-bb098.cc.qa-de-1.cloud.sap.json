@@ -1,0 +1,5 @@
+{
+  "status": "error",
+  "target": "node012-bb098.cc.qa-de-1.cloud.sap",
+  "message": "Failed to collect inventory. Check logs for details."
+}

@@ -1,25 +1,43 @@
-"""
+﻿"""
 handles the redfish inventory collection requests
 """
+
 import logging
-import time
 import socket
+import time
+
 import requests
+
+logger = logging.getLogger(__name__)
+
 
 class CollectorException(Exception):
     """
     exception class for the collector
     """
 
+
 class RedfishIventoryCollector:
     """
     collects the inventory from a server using Redfish
     """
 
-    def __init__(self, timeout, target, usr, pwd, vendor_aliases=None, lom_manufacturers=None, label=None, bmc_ip=None):
+    def __init__(
+        self,
+        timeout,
+        target,
+        usr,
+        pwd,
+        vendor_aliases=None,
+        lom_manufacturers=None,
+        label=None,
+        bmc_ip=None,
+    ):
 
         self.target = label if label is not None else target
-        self.ip_address = bmc_ip if bmc_ip is not None else self.get_bmc_ip_address(target)
+        self.ip_address = (
+            bmc_ip if bmc_ip is not None else self.get_bmc_ip_address(target)
+        )
 
         self._username = usr
         self._password = pwd
@@ -33,6 +51,10 @@ class RedfishIventoryCollector:
         self._urls = {
             "Systems_Root": "/redfish/v1/Systems",
             "Chassis_Root": "/redfish/v1/Chassis",
+            "Power": [],
+            "PCIeDevices": [],
+            "NetworkAdapters": [],
+            "Drives": [],
         }
         self._inventory = {}
 
@@ -41,7 +63,7 @@ class RedfishIventoryCollector:
         self.session_url = None
         self._auth_token = None
         self._basic_auth = False
-        self._session = None
+        self._session: requests.Session = requests.Session()
         self._vendor = None
         self._product = None
 
@@ -53,55 +75,60 @@ class RedfishIventoryCollector:
         try:
             return socket.gethostbyname(target)
         except socket.gaierror as err:
-            raise CollectorException(f"DNS lookup failed for Remote Board {target}: {err}") from err
+            raise CollectorException(
+                f"DNS lookup failed for Remote Board {target}: {err}"
+            ) from err
 
     def get_session(self):
         """
         get a session from the server's remote management interface using Redfish
         """
         # Get the url for the server info and messure the response time
-        logging.info("  Target %s: Connecting to server %s", self.target, self.ip_address)
+        logger.info(
+            "  Target %s: Connecting to server %s", self.target, self.ip_address
+        )
         start_time = time.time()
         server_response = self.connect_server("/redfish/v1", noauth=True)
 
         if not server_response:
-            logging.error(
+            logger.error(
                 "  Target %s: No data received from server %s!",
                 self.target,
-                self.ip_address
+                self.ip_address,
             )
-            self._session = None
             return
 
-        self._response_time = round(time.time() - start_time,2)
-        logging.info("  Target %s: Response time: %s seconds.", self.target, self._response_time)
-
-        self._vendor = server_response.get('Vendor')
-        self._product = server_response.get('Product')
-
-        session_service = self.connect_server(
-            server_response['SessionService']['@odata.id'],
-            basic_auth=True
+        self._response_time = round(time.time() - start_time, 2)
+        logger.info(
+            "  Target %s: Response time: %s seconds.", self.target, self._response_time
         )
 
-        if not self.last_http_code == 200:
-            logging.warning("  Target %s: Failed to get a session from server %s!",
+        self._vendor = server_response.get("Vendor")
+        self._product = server_response.get("Product")
+
+        session_service = self.connect_server(
+            server_response["SessionService"]["@odata.id"], basic_auth=True
+        )
+
+        if self.last_http_code != 200:
+            logger.warning(
+                "  Target %s: Failed to get a session from server %s!",
                 self.target,
-                self.ip_address
+                self.ip_address,
             )
             return
 
-        if not session_service or 'Sessions' not in session_service:
-            logging.warning(
+        if not session_service or "Sessions" not in session_service:
+            logger.warning(
                 "  Target %s: No Sessions URL in response from server %s, falling back to basic auth.",
-                self.target, self.ip_address
+                self.target,
+                self.ip_address,
             )
             self._basic_auth = True
             return
 
         sessions_url = (
-            f"https://{self.ip_address}"
-            f"{session_service['Sessions']['@odata.id']}"
+            f"https://{self.ip_address}{session_service['Sessions']['@odata.id']}"
         )
         session_data = {"UserName": self._username, "Password": self._password}
         self._session.auth = None
@@ -110,26 +137,26 @@ class RedfishIventoryCollector:
         # Try to get a session
         try:
             result = self._session.post(
-                sessions_url,
-                json=session_data,
-                verify=False,
-                timeout=self.timeout
+                sessions_url, json=session_data, verify=False, timeout=self.timeout
             )
             result.raise_for_status()
 
-        except (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout) as err:
-            logging.warning(
+        except (
+            requests.exceptions.ConnectTimeout,
+            requests.exceptions.ReadTimeout,
+        ) as err:
+            logger.warning(
                 "  Target %s: A timeout occured %s: %s",
                 self.target,
                 self.ip_address,
-                err
+                err,
             )
 
         except requests.exceptions.ConnectionError:
-            logging.warning(
+            logger.warning(
                 "  Target %s: Failed to get an auth token from server %s. Retrying ...",
                 self.target,
-                self.ip_address
+                self.ip_address,
             )
             try:
                 result = self._session.post(
@@ -138,35 +165,37 @@ class RedfishIventoryCollector:
                 result.raise_for_status()
 
             except requests.exceptions.ConnectionError:
-                logging.error(
+                logger.error(
                     "  Target %s: Error getting an auth token from server %s",
                     self.target,
-                    self.ip_address
+                    self.ip_address,
                 )
                 self._basic_auth = True
 
         except requests.exceptions.HTTPError as err:
-            logging.warning(
+            logger.warning(
                 "  Target %s: No session received from server %s: %s",
                 self.target,
                 self.ip_address,
-                err
+                err,
             )
-            logging.warning("  Target %s: Switching to basic authentication.", self.target)
+            logger.warning(
+                "  Target %s: Switching to basic authentication.", self.target
+            )
             self._basic_auth = True
 
-        if result:
-            if result.status_code in [200,201]:
-                self._auth_token = result.headers['X-Auth-Token']
-                self.session_url = result.json()['@odata.id']
-                logging.info(
-                    "  Target %s: Got an auth token from server %s!",
-                    self.target,
-                    self.ip_address
-                )
+        if result and result.status_code in [200, 201]:
+            self._auth_token = result.headers["X-Auth-Token"]
+            self.session_url = result.json()["@odata.id"]
+            logger.info(
+                "  Target %s: Got an auth token from server %s!",
+                self.target,
+                self.ip_address,
+            )
 
-
-    def connect_server(self, command, noauth = False, basic_auth = False, fields = None, not_found_ok = False):
+    def connect_server(
+        self, command, noauth=False, basic_auth=False, fields=None, not_found_ok=False
+    ):
         """
         connect to the server and get the data
         """
@@ -179,7 +208,7 @@ class RedfishIventoryCollector:
         request_start = time.time()
 
         if fields:
-            logging.debug("  Target %s: Getting fields %s", self.target, fields)
+            logger.debug("  Target %s: Getting fields %s", self.target, fields)
             command += "?$select=" + ",".join(fields)
 
         url = f"https://{self.ip_address}{command}"
@@ -188,62 +217,67 @@ class RedfishIventoryCollector:
         if not self._session:
             self._session = requests.Session()
         else:
-            logging.debug("  Target %s: Using existing session.", self.target)
+            logger.debug("  Target %s: Using existing session.", self.target)
         self._session.verify = False
-        self._session.headers.update({'charset': 'utf-8'})
-        self._session.headers.update({'content-type': 'application/json'})
-        self._session.headers.update({'Accept': 'application/json'})
+        self._session.headers.update({"charset": "utf-8"})
+        self._session.headers.update({"content-type": "application/json"})
+        self._session.headers.update({"Accept": "application/json"})
 
         if noauth:
-            logging.debug("  Target %s: Using no auth", self.target)
+            logger.debug("  Target %s: Using no auth", self.target)
         elif basic_auth or self._basic_auth:
             self._session.auth = (self._username, self._password)
-            logging.debug(
+            logger.debug(
                 "  Target %s: Using basic auth with user %s",
                 self.target,
-                self._username
+                self._username,
             )
         else:
-            logging.debug("  Target %s: Using auth token", self.target)
+            logger.debug("  Target %s: Using auth token", self.target)
             self._session.auth = None
-            self._session.headers.update({'X-Auth-Token': self._auth_token})
+            self._session.headers.update({"X-Auth-Token": self._auth_token or ""})
 
-        logging.debug("  Target %s: Using URL %s", self.target, url)
+        logger.debug("  Target %s: Using URL %s", self.target, url)
         try:
-            server_req = self._session.get(url, timeout = self.timeout)
+            server_req = self._session.get(url, timeout=self.timeout)
             server_req.raise_for_status()
 
         except requests.exceptions.ConnectionError:
-            logging.warning(
+            logger.warning(
                 "  Target %s: Connection Error with IP %s. Retrying ...",
                 self.target,
-                self.ip_address
+                self.ip_address,
             )
             try:
-                server_req = self._session.get(url, timeout = self.timeout)
+                server_req = self._session.get(url, timeout=self.timeout)
                 server_req.raise_for_status()
             except requests.exceptions.ConnectionError as e:
-                logging.error(
+                logger.error(
                     "  Target %s: Unable to connect to IP %s: %s",
                     self.target,
                     self.ip_address,
-                    e
+                    e,
                 )
 
         except requests.exceptions.RequestException as err:
             if err.response is not None:
                 if not_found_ok and err.response.status_code == 404:
-                    logging.debug(
+                    logger.debug(
                         "  Target %s: Resource not found (404): %s",
-                        self.target, err.response.url
+                        self.target,
+                        err.response.url,
                     )
                 else:
-                    logging.error(
+                    logger.error(
                         "  Target %s: Unable to connect to %s: Status Code %s",
-                        self.target, err.response.url, err.response.status_code
+                        self.target,
+                        err.response.url,
+                        err.response.status_code,
                     )
             else:
-                logging.error("  Target %s: Unable to connect to URL %s", self.target, url)
+                logger.error(
+                    "  Target %s: Unable to connect to URL %s", self.target, url
+                )
 
         try:
             if server_req is not None:
@@ -253,12 +287,8 @@ class RedfishIventoryCollector:
             if server_req is not None:
                 server_req.close()
 
-        request_duration = round(time.time() - request_start,2)
-        logging.debug(
-            "  Target %s: Request duration: %s",
-            self.target,
-            request_duration
-        )
+        request_duration = round(time.time() - request_start, 2)
+        logger.debug("  Target %s: Request duration: %s", self.target, request_duration)
         return server_response
 
     def _check_req_text(self, req):
@@ -269,7 +299,7 @@ class RedfishIventoryCollector:
             req_text = req.json()
 
         except ValueError:
-            logging.debug("  Target %s: No json data received.", self.target)
+            logger.debug("  Target %s: No json data received.", self.target)
 
         # req evaluates to True if the status code was between 200 and 400, False otherwise.
         # workaround for Cisco UCSC-C480-M5 returning 503 but still delivering the data
@@ -277,75 +307,74 @@ class RedfishIventoryCollector:
             return req_text
 
         # if the request fails the server might give a hint in the ExtendedInfo field
-        if req_text:
-            if "error" in req_text and '@Message.ExtendedInfo' in req_text['error']:
-                logging.debug(
-                    "  Target %s: %s: %s",
-                    self.target, req_text['error']['code'],
-                    req_text['error']['message']
-                )
+        if (
+            req_text
+            and "error" in req_text
+            and "@Message.ExtendedInfo" in req_text["error"]
+        ):
+            logger.debug(
+                "  Target %s: %s: %s",
+                self.target,
+                req_text["error"]["code"],
+                req_text["error"]["message"],
+            )
 
-                if isinstance(req_text['error']['@Message.ExtendedInfo'], list):
-                    if 'Message' in req_text['error']['@Message.ExtendedInfo'][0]:
-                        logging.debug(
-                            "  Target %s: %s",
-                            self.target,
-                            req_text['error']['@Message.ExtendedInfo'][0]['Message']
-                        )
+            if isinstance(req_text["error"]["@Message.ExtendedInfo"], list):
+                if "Message" in req_text["error"]["@Message.ExtendedInfo"][0]:
+                    logger.debug(
+                        "  Target %s: %s",
+                        self.target,
+                        req_text["error"]["@Message.ExtendedInfo"][0]["Message"],
+                    )
 
-                elif isinstance(req_text['error']['@Message.ExtendedInfo'], dict):
-                    if 'Message' in req_text['error']['@Message.ExtendedInfo']:
-                        logging.debug(
-                            "  Target %s: %s",
-                            self.target,
-                            req_text['error']['@Message.ExtendedInfo']['Message']
-                        )
-                else:
-                    pass
+            elif isinstance(req_text["error"]["@Message.ExtendedInfo"], dict):
+                if "Message" in req_text["error"]["@Message.ExtendedInfo"]:
+                    logger.debug(
+                        "  Target %s: %s",
+                        self.target,
+                        req_text["error"]["@Message.ExtendedInfo"]["Message"],
+                    )
+            else:
+                pass
 
         return req_text
 
     def _get_system_urls(self):
 
-        systems = self.connect_server(self._urls['Systems_Root'])
+        systems = self.connect_server(self._urls["Systems_Root"])
 
         if not systems:
-            logging.error(
-                "  Target %s: No Systems Info could be retrieved!",
-                self.target
+            logger.error(
+                "  Target %s: No Systems Info could be retrieved!", self.target
             )
             return
 
-        if not systems.get('Members'):
-            logging.error(
-                "  Target %s: No Systems Members found!",
-                self.target
-            )
+        if not systems.get("Members"):
+            logger.error("  Target %s: No Systems Members found!", self.target)
             return
 
-        if len(systems['Members']) > 1:
-            logging.warning(
-                "  Target %s: More than one System found!",
-                self.target
-            )
+        if len(systems["Members"]) > 1:
+            logger.warning("  Target %s: More than one System found!", self.target)
 
-        system_url = systems['Members'][0]['@odata.id']
-        self._urls.update({'Systems': system_url})
+        system_url = systems["Members"][0]["@odata.id"]
+        self._urls.update({"Systems": system_url})
 
         server_info = self.connect_server(system_url)
 
         if not server_info:
-            logging.warning("  Target %s: No Server Info could be retrieved!", self.target)
+            logger.warning(
+                "  Target %s: No Server Info could be retrieved!", self.target
+            )
             return
 
         fields = (
-            'SKU',
-            'SerialNumber',
-            'Manufacturer',
-            'Model',
-            'PowerState',
-            'MemorySummary',
-            'ProcessorSummary'
+            "SKU",
+            "SerialNumber",
+            "Manufacturer",
+            "Model",
+            "PowerState",
+            "MemorySummary",
+            "ProcessorSummary",
         )
 
         for field in fields:
@@ -355,24 +384,27 @@ class RedfishIventoryCollector:
                 field_value = field_value.rstrip()
             self._inventory.update({field: field_value})
 
-        if not self._inventory.get('Manufacturer') and self._vendor:
-            logging.info(
+        if not self._inventory.get("Manufacturer") and self._vendor:
+            logger.info(
                 "  Target %s: Manufacturer not in System data, using Vendor from /redfish/v1: %s",
-                self.target, self._vendor
+                self.target,
+                self._vendor,
             )
-            self._inventory['Manufacturer'] = self._vendor
+            self._inventory["Manufacturer"] = self._vendor
 
-        if not self._inventory.get('Model') and self._product:
-            logging.info(
+        if not self._inventory.get("Model") and self._product:
+            logger.info(
                 "  Target %s: Model not in System data, using Product from /redfish/v1: %s",
-                self.target, self._product
+                self.target,
+                self._product,
             )
-            self._inventory['Model'] = self._product
+            self._inventory["Model"] = self._product
 
-        logging.info("  Target %s: Server powerstate: %s",
-                        self.target,
-                        self._inventory['PowerState']
-                    )
+        logger.info(
+            "  Target %s: Server powerstate: %s",
+            self.target,
+            self._inventory["PowerState"],
+        )
 
         # Cache so _get_tpm_info can reuse the response without a second HTTP request.
         self._system_info = server_info
@@ -380,72 +412,73 @@ class RedfishIventoryCollector:
         # get the links of the parts for later
 
         urls = (
-            'Memory',
-            'EthernetInterfaces',
-            'NetworkInterfaces',
-            'Processors',
-            'Storage',
-            'SimpleStorage',
+            "Memory",
+            "EthernetInterfaces",
+            "NetworkInterfaces",
+            "Processors",
+            "Storage",
+            "SimpleStorage",
         )
 
         for url in urls:
             if url in server_info:
-                self._urls.update({url: server_info[url]['@odata.id']})
+                self._urls.update({url: server_info[url]["@odata.id"]})
 
-        base_na_url = self._urls['Systems'] + '/BaseNetworkAdapters'
+        base_na_url = self._urls["Systems"] + "/BaseNetworkAdapters"
         probe = self.connect_server(base_na_url, not_found_ok=True)
-        if probe and probe.get('Members') is not None:
-            self._urls['BaseNetworkAdapters'] = base_na_url
+        if probe and probe.get("Members") is not None:
+            self._urls["BaseNetworkAdapters"] = base_na_url
 
     def _get_chassis_urls(self):
-        logging.debug("  Target %s: Get the Chassis URLs.", self.target)
+        logger.debug("  Target %s: Get the Chassis URLs.", self.target)
 
-        chassis = self.connect_server(self._urls['Chassis_Root'])
+        chassis = self.connect_server(self._urls["Chassis_Root"])
 
         if not chassis:
-            logging.warning("  Target %s: No Chassis could be retrieved!", self.target)
+            logger.warning("  Target %s: No Chassis could be retrieved!", self.target)
             return
 
-        for chassi in chassis['Members']:
-            chassi_info = self.connect_server(chassi['@odata.id'])
+        for chassi in chassis["Members"]:
+            chassi_info = self.connect_server(chassi["@odata.id"])
 
             if not chassi_info:
-                logging.warning("  Target %s: Chassis has no info! %s",
+                logger.warning(
+                    "  Target %s: Chassis has no info! %s",
                     self.target,
-                    chassi['@odata.id']
+                    chassi["@odata.id"],
                 )
                 continue
 
-            urls = ('Power', 'PCIeDevices', 'NetworkAdapters')
+            urls = ("Power", "PCIeDevices", "NetworkAdapters")
             for url in urls:
                 if not self._urls.get(url):
                     self._urls.update({url: []})
 
                 if url in chassi_info:
-                    self._urls[url].append(chassi_info[url]['@odata.id'])
+                    self._urls[url].append(chassi_info[url]["@odata.id"])
                 # Dell iDRAC has some of the URLs in the links section, e.g. PCIeDevices
                 elif (
-                    'Links' in chassi_info and 
-                    url in chassi_info['Links'] and
-                    chassi_info['Links'][url] != []
+                    "Links" in chassi_info
+                    and url in chassi_info["Links"]
+                    and chassi_info["Links"][url] != []
                 ):
-                    for entry in chassi_info['Links'][url]:
+                    for entry in chassi_info["Links"][url]:
                         if isinstance(entry, str):
                             link = entry
                         else:
-                            link = entry['@odata.id']
+                            link = entry["@odata.id"]
                         self._urls[url].append(link)
                 else:
-                    logging.debug(
+                    logger.debug(
                         "  Target %s: No %s URL found in Chassi info for Chassis %s!",
                         self.target,
                         url,
-                        chassi_info['Name']
+                        chassi_info["Name"],
                     )
 
     def _get_urls(self, url, not_found_ok=False):
-        urls= []
-        logging.debug("  Target %s: Get the %s URLs.", self.target, url)
+        urls = []
+        logger.debug("  Target %s: Get the %s URLs.", self.target, url)
         if isinstance(self._urls[url], list):
             device_urls = self._urls[url]
         else:
@@ -453,25 +486,25 @@ class RedfishIventoryCollector:
 
         for device_url in device_urls:
             collection = self.connect_server(device_url, not_found_ok=not_found_ok)
-            if collection and collection.get('Members'):
-                for member in collection['Members']:
-                    urls.append(member['@odata.id'])
+            if collection and collection.get("Members"):
+                for member in collection["Members"]:
+                    urls.append(member["@odata.id"])
 
         return urls
 
     def _get_storage_info(self, fields):
-        logging.info("  Target %s: Get the storage data.", self.target)
-        self._inventory.update({'Controllers': []})
-        self._urls.update({'Drives': []})
+        logger.info("  Target %s: Get the storage data.", self.target)
+        self._inventory.update({"Controllers": []})
+        self._urls.update({"Drives": []})
 
-        storage_collection = self.connect_server(self._urls['Storage'])
+        storage_collection = self.connect_server(self._urls["Storage"])
 
         if storage_collection:
             self._get_storage_details(storage_collection, fields)
 
-        if self._urls.get('SimpleStorage') and not self._inventory['Controllers']:
+        if self._urls.get("SimpleStorage") and not self._inventory["Controllers"]:
             # Some Cisco and SuperMicro servers have the storage info in SimpleStorage
-            simple_storage = self.connect_server(self._urls['SimpleStorage'])
+            simple_storage = self.connect_server(self._urls["SimpleStorage"])
             if simple_storage:
                 pass
             # Get the storage details in case the Storage url has no proper infos (Supermicro)
@@ -479,67 +512,70 @@ class RedfishIventoryCollector:
 
     def _get_storage_details(self, storage_collection, fields):
         # From the storage collection we get the URL for every single storage controller
-        controllers = storage_collection.get('Members')
+        controllers = storage_collection.get("Members")
         if not controllers:
-            logging.warning(
+            logger.warning(
                 "  Target %s: Storage collection has no Members, skipping storage details.",
-                self.target
+                self.target,
             )
             return
         for controller in controllers:
             # get the actual controller data
-            controller_data = self.connect_server(controller['@odata.id'])
+            controller_data = self.connect_server(controller["@odata.id"])
             if not controller_data:
                 continue
-            if controller_data.get('StorageControllers'):
+            if controller_data.get("StorageControllers"):
                 # Cisco sometimes uses a list instead of a dict
-                if isinstance(controller_data['StorageControllers'], list):
-                    controller_details = controller_data['StorageControllers'][0]
+                if isinstance(controller_data["StorageControllers"], list):
+                    controller_details = controller_data["StorageControllers"][0]
                 else:
-                    controller_details = controller_data['StorageControllers']
+                    controller_details = controller_data["StorageControllers"]
             else:
                 controller_details = controller_data
 
-
-            controller_info = self._get_device_info(controller_details, fields, value_check=False)
+            controller_info = self._get_device_info(
+                controller_details, fields, value_check=False
+            )
             if controller_info:
                 # HPE ILO5 is missing the Name in the details of the controllers
-                controller_name = controller_details.get('Name', controller_data.get('Name'))
+                controller_name = controller_details.get(
+                    "Name", controller_data.get("Name")
+                )
                 if controller_name:
-                    controller_info.update({'Name': controller_name.rstrip()})
+                    controller_info.update({"Name": controller_name.rstrip()})
 
                 # Get the amount of drives attached to the controller
-                if controller_data.get('Drives@odata.count'):
+                if controller_data.get("Drives@odata.count"):
                     controller_info.update(
-                        {'DrivesAttached': controller_data['Drives@odata.count']}
+                        {"DrivesAttached": controller_data["Drives@odata.count"]}
                     )
 
-                controller_info['NetboxName'] = "RAID"
-                self._inventory['Controllers'].append(controller_info)
+                controller_info["NetboxName"] = "RAID"
+                self._inventory["Controllers"].append(controller_info)
 
                 # Get the drive URLs for later gathering the info
-                for drive in controller_data['Drives']:
-                    self._urls['Drives'].append(drive['@odata.id'])
+                for drive in controller_data["Drives"]:
+                    self._urls["Drives"].append(drive["@odata.id"])
 
     def _get_power_info(self, fields):
-        logging.info("  Target %s: Get the PSU data.", self.target)
-        for power_url in self._urls['Power']:
+        logger.info("  Target %s: Get the PSU data.", self.target)
+        for power_url in self._urls["Power"]:
             power_data = self.connect_server(power_url)
             if power_data:
-                self._inventory.update({'PSU': []})
-                for psu in power_data.get('PowerSupplies', []):
+                self._inventory.update({"PSU": []})
+                for psu in power_data.get("PowerSupplies", []):
                     psu_info = self._get_device_info(psu, fields)
-                    self._inventory['PSU'].append(psu_info)
+                    self._inventory["PSU"].append(psu_info)
 
     def _get_memory_info(self, fields):
-        logging.info("  Target %s: Get the Memory data.", self.target)
+        logger.info("  Target %s: Get the Memory data.", self.target)
 
-        dimm_urls = self._get_urls('Memory')
+        dimm_urls = self._get_urls("Memory")
         if not dimm_urls:
-            logging.warning("  Target %s: No DIMM URLs found!", self.target)
+            logger.warning("  Target %s: No DIMM URLs found!", self.target)
             return
 
-        self._inventory.update({'Memory': []})
+        self._inventory.update({"Memory": []})
         for dimm_url in dimm_urls:
             dimm = self.connect_server(dimm_url)
             if not dimm:
@@ -548,12 +584,12 @@ class RedfishIventoryCollector:
             # Skip only empty (Absent) slots — those have no physical DIMM.
             # UnavailableOffline means the CPU is in low-power state but the DIMM is present;
             # count it. If the URL times out, connect_server already returned None above.
-            dimm_status = dimm.get('Status', {})
-            if dimm_status.get('State') == 'Absent':
-                logging.debug(
+            dimm_status = dimm.get("Status", {})
+            if dimm_status.get("State") == "Absent":
+                logger.debug(
                     "  Target %s: Skipping DIMM slot %s (State: Absent)",
                     self.target,
-                    dimm.get('Id', dimm_url)
+                    dimm.get("Id", dimm_url),
                 )
                 continue
 
@@ -561,15 +597,20 @@ class RedfishIventoryCollector:
             if not dimm_info:
                 continue
 
-            ram_rounded = round(self._inventory['MemorySummary'].get('TotalSystemMemoryGiB') or 0)
-            dimm_info['NetboxName'] = f"RAM {ram_rounded}GB"
+            ram_rounded = round(
+                self._inventory["MemorySummary"].get("TotalSystemMemoryGiB") or 0
+            )
+            dimm_info["NetboxName"] = f"RAM {ram_rounded}GB"
 
             # HPE has the DIMM Manufacturer in the OEM data
-            oem_hpe = dimm.get('Oem', {}).get('Hpe', {})
-            if not dimm_info.get('Manufacturer') and oem_hpe.get('DIMMStatus') != 'NotPresent':
-                dimm_info['Manufacturer'] = oem_hpe.get('VendorName')
+            oem_hpe = dimm.get("Oem", {}).get("Hpe", {})
+            if (
+                not dimm_info.get("Manufacturer")
+                and oem_hpe.get("DIMMStatus") != "NotPresent"
+            ):
+                dimm_info["Manufacturer"] = oem_hpe.get("VendorName")
 
-            self._inventory['Memory'].append(dimm_info)
+            self._inventory["Memory"].append(dimm_info)
 
     def _get_info_from_urls(self, urls, fields=None):
         devices = []
@@ -587,7 +628,7 @@ class RedfishIventoryCollector:
         return devices
 
     def _get_device_info(self, device_info, fields, value_check=True):
-        '''extract certain fields from the data'''
+        """extract certain fields from the data"""
         current_device = {}
         if fields:
             for field in fields:
@@ -602,7 +643,8 @@ class RedfishIventoryCollector:
 
         if value_check:
             has_values = [
-                v for k, v in current_device.items()
+                v
+                for k, v in current_device.items()
                 if v != "" and v is not None and k != "Name"
             ]
 
@@ -612,62 +654,57 @@ class RedfishIventoryCollector:
         return current_device
 
     def _get_port_info(self, port_info):
-        '''get the port speed of the NIC'''
-        port = (
-            {
-                'PortSpeed': 0, 
-                'MAC': None
-            }
-        )
+        """get the port speed of the NIC"""
+        port = {"PortSpeed": 0, "MAC": None}
 
         # Get the MAC address
         # HPE Gen11, Lenovo v3
-        if 'Ethernet' in port_info:
-            macs = port_info['Ethernet']['AssociatedMACAddresses']
+        if "Ethernet" in port_info:
+            macs = port_info["Ethernet"]["AssociatedMACAddresses"]
             if isinstance(macs, list):
-                port['MAC'] = macs[0]
+                port["MAC"] = macs[0]
             else:
-                port['MAC'] = macs
+                port["MAC"] = macs
 
         # Dell R750xd, XE9680
         else:
-            macs = port_info.get('AssociatedNetworkAddresses')
+            macs = port_info.get("AssociatedNetworkAddresses")
             if isinstance(macs, list):
-                port['MAC'] = macs[0] if macs else None
+                port["MAC"] = macs[0] if macs else None
             else:
-                port['MAC'] = macs
+                port["MAC"] = macs
 
-        if ('SupportedLinkCapabilities' not in port_info and
-                'CurrentSpeedGbps' not in port_info and
-                'MaxSpeedGbps' not in port_info):
-            logging.warning(
+        if (
+            "SupportedLinkCapabilities" not in port_info
+            and "CurrentSpeedGbps" not in port_info
+            and "MaxSpeedGbps" not in port_info
+        ):
+            logger.warning(
                 "  Target %s: No speed information found for Port %s!",
                 self.target,
-                port_info['@odata.id']
+                port_info["@odata.id"],
             )
             return port
 
         current_port_speed_gbps = 0
-        if 'CurrentSpeedGbps' in port_info or 'MaxSpeedGbps' in port_info:
+        if "CurrentSpeedGbps" in port_info or "MaxSpeedGbps" in port_info:
             current_port_speed_gbps = (
-                port_info.get('CurrentSpeedGbps') or
-                port_info.get('MaxSpeedGbps') or
-                0
+                port_info.get("CurrentSpeedGbps") or port_info.get("MaxSpeedGbps") or 0
             )
         else:
             speed = 0
-            capabilities = port_info.get('SupportedLinkCapabilities', [])
+            capabilities = port_info.get("SupportedLinkCapabilities", [])
             if isinstance(capabilities, list) and capabilities:
                 speed = (
-                    capabilities[0].get('CapableLinkSpeedMbps') or
-                    capabilities[0].get('LinkSpeedMbps') or
-                    0
+                    capabilities[0].get("CapableLinkSpeedMbps")
+                    or capabilities[0].get("LinkSpeedMbps")
+                    or 0
                 )
             elif isinstance(capabilities, dict):
                 speed = (
-                    capabilities.get('CapableLinkSpeedMbps') or
-                    capabilities.get('LinkSpeedMbps') or
-                    0
+                    capabilities.get("CapableLinkSpeedMbps")
+                    or capabilities.get("LinkSpeedMbps")
+                    or 0
                 )
 
             if isinstance(speed, list):
@@ -677,10 +714,10 @@ class RedfishIventoryCollector:
             # Even though the name is CapableLinkSpeedMbps,
             # the speed is sometimes in bits/second (seen on HPE Gen11)
             if speed > 1048576:
-                current_port_speed_gbps = int(round(speed / 1024 / 1024 / 1024))
+                current_port_speed_gbps = round(speed / 1024 / 1024 / 1024)
             else:
-                current_port_speed_gbps = int(round(speed / 1000))
-        port['PortSpeed'] = current_port_speed_gbps
+                current_port_speed_gbps = round(speed / 1000)
+        port["PortSpeed"] = current_port_speed_gbps
 
         return port
 
@@ -689,207 +726,237 @@ class RedfishIventoryCollector:
         get the drive info
         """
 
-        logging.info("  Target %s: Get the drive data.", self.target)
-        drives = self._get_info_from_urls(self._urls['Drives'], fields)
+        logger.info("  Target %s: Get the drive data.", self.target)
+        drives = self._get_info_from_urls(self._urls["Drives"], fields)
 
         drives_updated = []
         for drive in drives:
-            if not drive['PartNumber']:
-                drive['PartNumber'] = drive['Model']
+            if not drive["PartNumber"]:
+                drive["PartNumber"] = drive["Model"]
 
-            if (drive['CapacityBytes'] or 0) > 0:
-                capacity_gb = round((drive['CapacityBytes'] or 0) / 1024 / 1024 / 1024)
-                if (drive['Protocol'] in ["PCIe", "NVMe"] and
-                        drive['MediaType'] == "SSD") or "NVMe" in drive['Name']:
-                    drive['NetboxName'] = f"NVMe {capacity_gb}GB"
-                elif (drive['Protocol'] in ["SATA", "SAS", None] and
-                    drive['MediaType'] in ["SSD", "HDD"]):
-                    drive['NetboxName'] = f"{drive['MediaType']} {capacity_gb}GB"
+            if (drive["CapacityBytes"] or 0) > 0:
+                capacity_gb = round((drive["CapacityBytes"] or 0) / 1024 / 1024 / 1024)
+                if (
+                    drive["Protocol"] in ["PCIe", "NVMe"]
+                    and drive["MediaType"] == "SSD"
+                ) or "NVMe" in drive["Name"]:
+                    drive["NetboxName"] = f"NVMe {capacity_gb}GB"
+                elif drive["Protocol"] in ["SATA", "SAS", None] and drive[
+                    "MediaType"
+                ] in ["SSD", "HDD"]:
+                    drive["NetboxName"] = f"{drive['MediaType']} {capacity_gb}GB"
                     # Supermicro is missing the Protocol for SSDs
-                    drive['Protocol'] = drive.get('Protocol') or 'SATA'
+                    drive["Protocol"] = drive.get("Protocol") or "SATA"
                 else:
-                    logging.warning(
+                    logger.warning(
                         "  Target %s: Unknown Drive Type! Protocol = %s, MediaType = %s",
-                        self.target, drive['Protocol'],
-                        drive['MediaType']
+                        self.target,
+                        drive["Protocol"],
+                        drive["MediaType"],
                     )
                 drives_updated.append(drive)
 
-        self._inventory.update({'Drives': drives_updated})
+        self._inventory.update({"Drives": drives_updated})
 
     def _get_processor_info(self, fields):
 
-        logging.info("  Target %s: Get the CPU data.", self.target)
-        proc_urls = self._get_urls('Processors')
+        logger.info("  Target %s: Get the CPU data.", self.target)
+        proc_urls = self._get_urls("Processors")
         if not proc_urls:
-            logging.warning("  Target %s: No Processors found!", self.target)
+            logger.warning("  Target %s: No Processors found!", self.target)
             return
 
         processors = self._get_info_from_urls(proc_urls, fields)
         processors_updated = []
         for processor in processors:
-
-            if processor['ProcessorType'] == 'CPU':
-                processor['NetboxName'] = f"CPU {processor['TotalCores']}C"
-            elif processor['ProcessorType'] == 'GPU':
+            if processor["ProcessorType"] == "CPU":
+                processor["NetboxName"] = f"CPU {processor['TotalCores']}C"
+            elif processor["ProcessorType"] == "GPU":
                 # The NVIDIA GPUs might appear as well here as
                 # CPUs with ProcessorType == 'GPU'.
                 # We need to filter them out to avoid duplicate entries.
                 # They are getting detected as PCI devices as well.
                 continue
             else:
-                logging.warning(
+                logger.warning(
                     "  Target %s: Unknown Processor Type for %s: %s.",
                     self.target,
-                    processor['Name'],
-                    processor['ProcessorType']
+                    processor["Name"],
+                    processor["ProcessorType"],
                 )
 
-            if processor['Model']:
-                processor['Description'] = processor['Model']
-            if processor['MaxSpeedMHz']:
-                base = processor.get('Description') or processor.get('Name') or 'Unknown CPU'
-                processor['Description'] = f"{base} @ {processor['MaxSpeedMHz']/1000}GHz"
+            if processor["Model"]:
+                processor["Description"] = processor["Model"]
+            if processor["MaxSpeedMHz"]:
+                base = (
+                    processor.get("Description")
+                    or processor.get("Name")
+                    or "Unknown CPU"
+                )
+                processor["Description"] = (
+                    f"{base} @ {processor['MaxSpeedMHz'] / 1000}GHz"
+                )
             processors_updated.append(processor)
 
-        self._inventory.update({'Processors': processors_updated})
+        self._inventory.update({"Processors": processors_updated})
 
     def _get_pci_devices_info(self, fields):
         """
         get the PCIe devices info
         """
 
-        logging.info("  Target %s: Get the PCIeDevices data.", self.target)
-        if isinstance(self._urls['PCIeDevices'], list):
-            pcie_urls = self._urls['PCIeDevices']
+        logger.info("  Target %s: Get the PCIeDevices data.", self.target)
+        if isinstance(self._urls["PCIeDevices"], list):
+            pcie_urls = self._urls["PCIeDevices"]
         else:
-            pcie_urls = self._get_urls('PCIeDevices')
+            pcie_urls = self._get_urls("PCIeDevices")
 
         if not pcie_urls:
-            logging.warning("  Target %s: No PCIe URLs found!", self.target)
+            logger.warning("  Target %s: No PCIe URLs found!", self.target)
             return
 
         pcie_device_urls = []
         for pcie_url in pcie_urls:
             collection = self.connect_server(pcie_url)
-            if collection and collection.get('Members'):
-                for member in collection['Members']:
-                    pcie_device_urls.append(member['@odata.id'])
+            if collection and collection.get("Members"):
+                for member in collection["Members"]:
+                    pcie_device_urls.append(member["@odata.id"])
 
         if not pcie_device_urls:
-            logging.warning("  Target %s: No PCIe Device URLs found!", self.target)
+            logger.warning("  Target %s: No PCIe Device URLs found!", self.target)
             return
-        
+
         pcie_devices = self._get_info_from_urls(pcie_device_urls, fields=fields)
 
         pcie_devices_updated = []
         # Get the DeviceClass
         for pcie_device in pcie_devices:
-
             pcie_device_functions_urls = []
             pcie_functions = ""
 
             # Lenovo and Dell
-            if pcie_device.get('Links'):
-                pcie_functions = pcie_device['Links'].get('PCIeFunctions')
+            if pcie_device.get("Links"):
+                pcie_functions = pcie_device["Links"].get("PCIeFunctions")
                 pcie_device.pop("Links")
 
             # HPE
-            if pcie_device.get('PCIeFunctions'):
+            if pcie_device.get("PCIeFunctions"):
                 # Did we get the pcie_functions already above?
                 # Lenovo has both entries (Links and PCIeFunctions)
                 if not pcie_functions:
-                    pcie_functions_link = [pcie_device['PCIeFunctions']['@odata.id']]
+                    pcie_functions_link = [pcie_device["PCIeFunctions"]["@odata.id"]]
                     pcie_function_result = self._get_info_from_urls(
-                        pcie_functions_link, fields=None)
+                        pcie_functions_link, fields=None
+                    )
                     if pcie_function_result:
-                        pcie_functions = pcie_function_result[0]['Members']
+                        pcie_functions = pcie_function_result[0]["Members"]
                 pcie_device.pop("PCIeFunctions")
 
             if pcie_functions:
                 for member in pcie_functions:
-                    pcie_device_functions_urls.append(member['@odata.id'])
+                    pcie_device_functions_urls.append(member["@odata.id"])
 
             pcie_device_functions = self._get_info_from_urls(
-                pcie_device_functions_urls, fields=None)
+                pcie_device_functions_urls, fields=None
+            )
 
             if pcie_device_functions:
                 try:
-                    pcie_device['DeviceClass'] = pcie_device_functions[0]['DeviceClass']
+                    pcie_device["DeviceClass"] = pcie_device_functions[0]["DeviceClass"]
 
                 except (KeyError, AttributeError):
-                    pcie_device['DeviceClass'] = ""
+                    pcie_device["DeviceClass"] = ""
 
                 device_class_to_name = {
                     "NetworkController": "NIC",
                     "DisplayController": "GPU",
-                    "MassStorageController": "RAID"
+                    "MassStorageController": "RAID",
                 }
-                pcie_device['NetboxName'] = device_class_to_name.get(pcie_device['DeviceClass'], "")
+                pcie_device["NetboxName"] = device_class_to_name.get(
+                    pcie_device["DeviceClass"], ""
+                )
 
             pcie_devices_updated.append(pcie_device)
 
-        self._inventory.update({'PCIeDevices': pcie_devices_updated})
+        self._inventory.update({"PCIeDevices": pcie_devices_updated})
 
     def _get_network_info(self, fields):
-        logging.info("  Target %s: Get the NetworkAdapters data.", self.target)
-        nic_urls = self._get_urls('NetworkAdapters')
+        logger.info("  Target %s: Get the NetworkAdapters data.", self.target)
+        nic_urls = self._get_urls("NetworkAdapters")
         if not nic_urls:
-            logging.warning("  Target %s: No NIC URLs found in NetworkAdapters, trying EthernetInterfaces fallback.", self.target)
+            logger.warning(
+                "  Target %s: No NIC URLs found in NetworkAdapters, trying EthernetInterfaces fallback.",
+                self.target,
+            )
             self._get_network_info_from_ethernet_interfaces()
             return
 
         # Cache individual adapter URLs so _collect_macs_from_network_adapters
         # can reuse them without re-fetching the collection.
-        self._urls['NetworkAdapterUrls'] = nic_urls
+        self._urls["NetworkAdapterUrls"] = nic_urls
 
         network_cards = self._get_info_from_urls(nic_urls, fields)
         network_cards_updated = []
         for nic in network_cards:
             port_speed_gbps = 0
             # HPE Gen11 Calls it 'Ports'
-            nic_ports_url = nic['NetworkPorts'] if nic['NetworkPorts'] else nic.get('Ports')
+            nic_ports_url = (
+                nic["NetworkPorts"] if nic["NetworkPorts"] else nic.get("Ports")
+            )
             if nic_ports_url:
-                self._urls['NetworkPorts'] = nic_ports_url['@odata.id']
-                ports = self._get_urls('NetworkPorts')
+                self._urls["NetworkPorts"] = nic_ports_url["@odata.id"]
+                ports = self._get_urls("NetworkPorts")
                 ports_info = self._get_info_from_urls(ports)
                 # Sort ports by MAC address alphabetically for deterministic port assignment
                 # regardless of API return order — matches original mac_serial_ng.py behaviour.
-                ports_info.sort(key=lambda p: p.get('MAC') or '')
-                nic['Ports'] = []
+                ports_info.sort(key=lambda p: p.get("MAC") or "")
+                nic["Ports"] = []
                 for port_info in ports_info:
-                    nic['Ports'].append(self._get_port_info(port_info))
+                    nic["Ports"].append(self._get_port_info(port_info))
 
-                port_speed_gbps = max(((port.get('PortSpeed') or 0) for port in nic['Ports']), default=0)
+                port_speed_gbps = max(
+                    ((port.get("PortSpeed") or 0) for port in nic["Ports"]), default=0
+                )
 
-            part_number = (nic.get('PartNumber') or '').strip().upper()
-            name_model = ((nic.get('Name') or '') + ' ' + (nic.get('Model') or '')).lower()
+            part_number = (nic.get("PartNumber") or "").strip().upper()
+            name_model = (
+                (nic.get("Name") or "") + " " + (nic.get("Model") or "")
+            ).lower()
             is_bluefield = (
-                part_number.startswith(('MBF2', 'MBF3')) or
-                'bluefield' in name_model
+                part_number.startswith(("MBF2", "MBF3")) or "bluefield" in name_model
             )
             prefix = "DPU" if is_bluefield else "NIC"
-            nic['NetboxName'] = f"{prefix} {int(port_speed_gbps)}Gb" if port_speed_gbps else prefix
+            nic["NetboxName"] = (
+                f"{prefix} {int(port_speed_gbps)}Gb" if port_speed_gbps else prefix
+            )
 
             # Build description from Model, optionally prefixed by Name when it adds context.
             # Dell Redfish uses "Network Adapter View" as a generic Name that adds no value.
-            _GENERIC_NIC_NAMES = {'network adapter view', 'network adapter', 'ethernet adapter'}
-            nic_name = (nic.get('Name') or '').strip()
-            nic_model = (nic.get('Model') or '').strip()
+            _GENERIC_NIC_NAMES = {
+                "network adapter view",
+                "network adapter",
+                "ethernet adapter",
+            }
+            nic_name = (nic.get("Name") or "").strip()
+            nic_model = (nic.get("Model") or "").strip()
             if nic_name.lower() in _GENERIC_NIC_NAMES:
-                nic_name = ''
-            if nic_model and (not nic_name or nic_model.lower() not in nic_name.lower()):
-                nic['Description'] = f"{nic_name} ({nic_model})" if nic_name else nic_model
+                nic_name = ""
+            if nic_model and (
+                not nic_name or nic_model.lower() not in nic_name.lower()
+            ):
+                nic["Description"] = (
+                    f"{nic_name} ({nic_model})" if nic_name else nic_model
+                )
             else:
-                nic['Description'] = nic_name or nic_model
-            nic.pop('NetworkPorts')
+                nic["Description"] = nic_name or nic_model
+            nic.pop("NetworkPorts")
             network_cards_updated.append(nic)
 
-        self._inventory.update({'NetworkAdapters': network_cards_updated})
+        self._inventory.update({"NetworkAdapters": network_cards_updated})
         # Build ID-keyed lookup so _collect_macs_from_network_adapters can match by
         # adapter ID instead of position (sorted URL order ≠ discovery order).
-        self._inventory['_NetworkAdaptersById'] = {
-            url.split('/')[-1].upper(): nic
+        self._inventory["_NetworkAdaptersById"] = {
+            url.split("/")[-1].upper(): nic
             for url, nic in zip(nic_urls, network_cards_updated)
         }
 
@@ -901,48 +968,61 @@ class RedfishIventoryCollector:
             network_cards_updated = self._collect_from_network_interfaces()
 
         if network_cards_updated:
-            logging.info("  Target %s: Found %d NIC(s) via EthernetInterfaces/NetworkInterfaces fallback.",
-                         self.target, len(network_cards_updated))
+            logger.info(
+                "  Target %s: Found %d NIC(s) via EthernetInterfaces/NetworkInterfaces fallback.",
+                self.target,
+                len(network_cards_updated),
+            )
         else:
-            logging.warning("  Target %s: No NIC data found in EthernetInterfaces or NetworkInterfaces.", self.target)
+            logger.warning(
+                "  Target %s: No NIC data found in EthernetInterfaces or NetworkInterfaces.",
+                self.target,
+            )
 
-        self._inventory.update({'NetworkAdapters': network_cards_updated})
+        self._inventory.update({"NetworkAdapters": network_cards_updated})
 
     def _collect_from_ethernet_interfaces(self):
-        if not self._urls.get('EthernetInterfaces'):
+        if not self._urls.get("EthernetInterfaces"):
             return []
-        logging.info("  Target %s: Trying EthernetInterfaces for NIC data.", self.target)
-        iface_urls = self._get_urls('EthernetInterfaces')
+        logger.info("  Target %s: Trying EthernetInterfaces for NIC data.", self.target)
+        iface_urls = self._get_urls("EthernetInterfaces")
         if not iface_urls:
-            logging.debug("  Target %s: EthernetInterfaces collection is empty.", self.target)
+            logger.debug(
+                "  Target %s: EthernetInterfaces collection is empty.", self.target
+            )
             return []
         nics = []
         for iface_url in iface_urls:
             iface = self.connect_server(iface_url)
             if not iface:
                 continue
-            speed_mbps = iface.get('SpeedMbps') or 0
-            speed_gbps = int(round(speed_mbps / 1000)) if speed_mbps else 0
-            nics.append({
-                'Name': iface.get('Name') or iface.get('Id', ''),
-                'Manufacturer': iface.get('Manufacturer') or self._inventory.get('Manufacturer', ''),
-                'Model': iface.get('Model', ''),
-                'SerialNumber': iface.get('SerialNumber', ''),
-                'PartNumber': iface.get('PartNumber', ''),
-                'SKU': iface.get('SKU', ''),
-                'NetboxName': f"NIC {int(speed_gbps)}Gb" if speed_gbps else "NIC",
-            })
+            speed_mbps = int(iface.get("SpeedMbps")) or 0
+            speed_gbps = round(speed_mbps / 1000) if speed_mbps else 0
+            nics.append(
+                {
+                    "Name": iface.get("Name") or iface.get("Id", ""),
+                    "Manufacturer": iface.get("Manufacturer")
+                    or self._inventory.get("Manufacturer", ""),
+                    "Model": iface.get("Model", ""),
+                    "SerialNumber": iface.get("SerialNumber", ""),
+                    "PartNumber": iface.get("PartNumber", ""),
+                    "SKU": iface.get("SKU", ""),
+                    "NetboxName": f"NIC {int(speed_gbps)}Gb" if speed_gbps else "NIC",
+                }
+            )
         return nics
 
     def _collect_from_network_interfaces(self):
         """Walk NetworkInterfaces → NetworkDeviceFunctions to find NIC hardware entries.
         This path is BMC-resident and available even when the host is powered off."""
-        if not self._urls.get('NetworkInterfaces'):
+        if not self._urls.get("NetworkInterfaces"):
             return []
-        logging.info("  Target %s: Trying NetworkInterfaces for NIC data.", self.target)
-        ni_urls = self._get_urls('NetworkInterfaces')
+        logger.info("  Target %s: Trying NetworkInterfaces for NIC data.", self.target)
+        ni_urls = self._get_urls("NetworkInterfaces")
         if not ni_urls:
-            logging.debug("  Target %s: NetworkInterfaces collection is empty.", self.target)
+            logger.debug(
+                "  Target %s: NetworkInterfaces collection is empty.", self.target
+            )
             return []
         nics = []
         for ni_url in ni_urls:
@@ -950,100 +1030,117 @@ class RedfishIventoryCollector:
             if not ni:
                 continue
             # NetworkDeviceFunctions are linked from NetworkInterface
-            ndf_link = ni.get('NetworkDeviceFunctions', {}).get('@odata.id') if ni.get('NetworkDeviceFunctions') else None
+            ndf_link = (
+                ni.get("NetworkDeviceFunctions", {}).get("@odata.id")
+                if ni.get("NetworkDeviceFunctions")
+                else None
+            )
             if not ndf_link:
                 continue
             ndf_collection = self.connect_server(ndf_link)
-            if not ndf_collection or not ndf_collection.get('Members'):
+            if not ndf_collection or not ndf_collection.get("Members"):
                 continue
-            for member in ndf_collection['Members']:
-                ndf = self.connect_server(member['@odata.id'])
+            for member in ndf_collection["Members"]:
+                ndf = self.connect_server(member["@odata.id"])
                 if not ndf:
                     continue
                 # Only include Ethernet device functions
-                if ndf.get('DeviceEnabled') is False:
+                if ndf.get("DeviceEnabled") is False:
                     continue
-                eth = ndf.get('Ethernet', {})
-                mac = eth.get('PermanentMACAddress') or eth.get('MACAddress')
+                eth = ndf.get("Ethernet", {})
+                mac = eth.get("PermanentMACAddress") or eth.get("MACAddress")
                 if not mac:
                     continue
-                nics.append({
-                    'Name': ndf.get('Name') or ndf.get('Id', ''),
-                    'Manufacturer': ndf.get('Manufacturer') or ni.get('Manufacturer') or self._inventory.get('Manufacturer', ''),
-                    'Model': ndf.get('Model', ''),
-                    'SerialNumber': ndf.get('SerialNumber', ''),
-                    'PartNumber': ndf.get('PartNumber', ''),
-                    'SKU': ndf.get('SKU', ''),
-                    'NetboxName': "NIC",
-                })
+                nics.append(
+                    {
+                        "Name": ndf.get("Name") or ndf.get("Id", ""),
+                        "Manufacturer": ndf.get("Manufacturer")
+                        or ni.get("Manufacturer")
+                        or self._inventory.get("Manufacturer", ""),
+                        "Model": ndf.get("Model", ""),
+                        "SerialNumber": ndf.get("SerialNumber", ""),
+                        "PartNumber": ndf.get("PartNumber", ""),
+                        "SKU": ndf.get("SKU", ""),
+                        "NetboxName": "NIC",
+                    }
+                )
         return nics
 
     def _get_tpm_info(self):
-        logging.info("  Target %s: Get the TPM data.", self.target)
+        logger.info("  Target %s: Get the TPM data.", self.target)
         # Reuse the system info already fetched in _get_system_urls — no extra HTTP request.
-        systeminfo = getattr(self, '_system_info', None) or self.connect_server(self._urls['Systems'])
+        systeminfo = getattr(self, "_system_info", None) or self.connect_server(
+            self._urls["Systems"]
+        )
         tpm_modules = []
 
-        if systeminfo and systeminfo.get('TrustedModules'):
-            for tpm in systeminfo['TrustedModules']:
-                module_type = tpm.get('InterfaceType')
-                module_state = tpm.get('Status', {}).get('State', 'Unknown')
+        if systeminfo and systeminfo.get("TrustedModules"):
+            for tpm in systeminfo["TrustedModules"]:
+                module_type = tpm.get("InterfaceType")
+                module_state = tpm.get("Status", {}).get("State", "Unknown")
                 tpm_info = {
-                    'Description': f'Interface Type: {module_type} - State: {module_state}',
-                    'Manufacturer': self._inventory['Manufacturer'],
-                    'NetboxName': 'TPM'
+                    "Description": f"Interface Type: {module_type} - State: {module_state}",
+                    "Manufacturer": self._inventory["Manufacturer"],
+                    "NetboxName": "TPM",
                 }
                 tpm_modules.append(tpm_info)
 
-        self._inventory.update({'TrustedModules': tpm_modules})
+        self._inventory.update({"TrustedModules": tpm_modules})
 
     def _get_remoteboard_mac(self):
         """Get the MAC address from the BMC's management interface."""
         managers = self.connect_server("/redfish/v1/Managers")
-        if not managers or not managers.get('Members'):
-            logging.warning("  Target %s: No Managers collection found.", self.target)
+        if not managers or not managers.get("Members"):
+            logger.warning("  Target %s: No Managers collection found.", self.target)
             return {}
 
-        members = managers['Members']
+        members = managers["Members"]
         bmc_url = None
         if len(members) == 1:
-            bmc_url = members[0]['@odata.id']
+            bmc_url = members[0]["@odata.id"]
         else:
             for member_ref in members:
-                m = self.connect_server(member_ref['@odata.id'])
-                if m and m.get('ManagerType') == 'BMC':
-                    bmc_url = member_ref['@odata.id']
+                m = self.connect_server(member_ref["@odata.id"])
+                if m and m.get("ManagerType") == "BMC":
+                    bmc_url = member_ref["@odata.id"]
                     break
 
         if not bmc_url:
-            logging.warning("  Target %s: No BMC manager found in Managers collection.", self.target)
+            logger.warning(
+                "  Target %s: No BMC manager found in Managers collection.", self.target
+            )
             return {}
 
         bmc = self.connect_server(bmc_url)
-        if not bmc or 'EthernetInterfaces' not in bmc:
-            logging.warning("  Target %s: BMC manager has no EthernetInterfaces link.", self.target)
+        if not bmc or "EthernetInterfaces" not in bmc:
+            logger.warning(
+                "  Target %s: BMC manager has no EthernetInterfaces link.", self.target
+            )
             return {}
 
-        ifaces = self.connect_server(bmc['EthernetInterfaces']['@odata.id'])
-        if not ifaces or not ifaces.get('Members'):
+        ifaces = self.connect_server(bmc["EthernetInterfaces"]["@odata.id"])
+        if not ifaces or not ifaces.get("Members"):
             return {}
 
-        for iface_ref in ifaces['Members']:
-            iface = self.connect_server(iface_ref['@odata.id'])
+        for iface_ref in ifaces["Members"]:
+            iface = self.connect_server(iface_ref["@odata.id"])
             if not iface:
                 continue
-            if not iface.get('InterfaceEnabled', True):
+            if not iface.get("InterfaceEnabled", True):
                 continue
-            mac = iface.get('PermanentMACAddress') or iface.get('MACAddress')
+            mac = iface.get("PermanentMACAddress") or iface.get("MACAddress")
             if mac:
-                logging.debug(
+                logger.debug(
                     "  Target %s: remoteboard MAC from %s: %s",
-                    self.target, iface_ref['@odata.id'], mac
+                    self.target,
+                    iface_ref["@odata.id"],
+                    mac,
                 )
-                return {'remoteboard': {'mac': mac, 'speed_gbps': 0}}
+                return {"remoteboard": {"mac": mac, "speed_gbps": 0}}
 
-        logging.warning(
-            "  Target %s: No enabled EthernetInterface with MAC found on BMC.", self.target
+        logger.warning(
+            "  Target %s: No enabled EthernetInterface with MAC found on BMC.",
+            self.target,
         )
         return {}
 
@@ -1053,13 +1150,12 @@ class RedfishIventoryCollector:
         nic_idx is the sequential NIC counter (1, 2, ...) used for PCIe adapters so that
         Netbox names stay NIC1, NIC2 regardless of physical slot gaps.
         """
-        parts = structured.split('.')
+        parts = structured.split(".")
         # NIC.FlexLOM / NIC.LOM  → L{port}
         # OCP.Slot / OCP.LOM     → L{port}  (Gen12 OCP embedded NIC)
-        is_lom = (
-            (len(parts) >= 2 and parts[1].upper() in ('LOM', 'FLEXLOM')) or
-            parts[0].upper() == 'OCP'
-        )
+        is_lom = (len(parts) >= 2 and parts[1].upper() in ("LOM", "FLEXLOM")) or parts[
+            0
+        ].upper() == "OCP"
         if is_lom:
             return f"L{port_idx}"
         return f"NIC{nic_idx}_Port{port_idx}"
@@ -1071,12 +1167,15 @@ class RedfishIventoryCollector:
         Adapters are sorted by StructuredName for deterministic ordering; ports within
         each adapter are sorted by MAC address (matching original mac_serial_ng.py).
         """
-        adapter_urls = self._get_urls('BaseNetworkAdapters', not_found_ok=True)
+        adapter_urls = self._get_urls("BaseNetworkAdapters", not_found_ok=True)
         if not adapter_urls:
             return False
 
-        logging.info("  Target %s: Collecting MACs from BaseNetworkAdapters (%d adapters).",
-                     self.target, len(adapter_urls))
+        logger.info(
+            "  Target %s: Collecting MACs from BaseNetworkAdapters (%d adapters).",
+            self.target,
+            len(adapter_urls),
+        )
 
         adapters = []
         for url in adapter_urls:
@@ -1085,44 +1184,60 @@ class RedfishIventoryCollector:
                 adapters.append(data)
 
         if not adapters:
-            logging.warning("  Target %s: BaseNetworkAdapters returned no data, falling back to NetworkAdapters.",
-                            self.target)
+            logger.warning(
+                "  Target %s: BaseNetworkAdapters returned no data, falling back to NetworkAdapters.",
+                self.target,
+            )
             return False
 
         # Sort adapters by StructuredName so slot order is deterministic
-        adapters.sort(key=lambda a: a.get('StructuredName', ''))
+        adapters.sort(key=lambda a: a.get("StructuredName", ""))
 
         nic_counter = 0
         for adapter in adapters:
-            structured = adapter.get('StructuredName', '')
-            name = adapter.get('Name', 'unknown')
-            location = adapter.get('Location', 'unknown')
-            ports = sorted(adapter.get('PhysicalPorts', []),
-                           key=lambda p: p.get('MacAddress') or '')
+            structured = adapter.get("StructuredName", "")
+            name = adapter.get("Name", "unknown")
+            location = adapter.get("Location", "unknown")
+            ports = sorted(
+                adapter.get("PhysicalPorts", []),
+                key=lambda p: p.get("MacAddress") or "",
+            )
 
             if not ports:
-                logging.debug("  Target %s: Adapter %s (%s) has no PhysicalPorts, skipping.",
-                              self.target, name, location)
+                logger.debug(
+                    "  Target %s: Adapter %s (%s) has no PhysicalPorts, skipping.",
+                    self.target,
+                    name,
+                    location,
+                )
                 continue
 
             # Determine if this is a LOM adapter; only PCIe adapters increment the counter
-            parts = structured.split('.') if structured else []
-            is_lom = len(parts) >= 2 and parts[1].upper() in ('LOM', 'FLEXLOM')
+            parts = structured.split(".") if structured else []
+            is_lom = len(parts) >= 2 and parts[1].upper() in ("LOM", "FLEXLOM")
             if not is_lom:
                 nic_counter += 1
 
-            logging.debug("  Target %s: Adapter %s (%s) StructuredName=%s - %d port(s).",
-                         self.target, name, location, structured or 'none', len(ports))
+            logger.debug(
+                "  Target %s: Adapter %s (%s) StructuredName=%s - %d port(s).",
+                self.target,
+                name,
+                location,
+                structured or "none",
+                len(ports),
+            )
 
             for port_idx, port in enumerate(ports, start=1):
-                mac = port.get('MacAddress')
+                mac = port.get("MacAddress")
                 if mac:
                     if structured:
-                        key = self._mac_key_from_structured_name(structured, port_idx, nic_counter)
+                        key = self._mac_key_from_structured_name(
+                            structured, port_idx, nic_counter
+                        )
                     else:
                         key = f"NIC{nic_counter}_Port{port_idx}"
-                    logging.debug("  Target %s:   %s = %s", self.target, key, mac)
-                    macs[key] = {'mac': mac, 'speed_gbps': 0}
+                    logger.debug("  Target %s:   %s = %s", self.target, key, mac)
+                    macs[key] = {"mac": mac, "speed_gbps": 0}
 
         return True
 
@@ -1134,32 +1249,38 @@ class RedfishIventoryCollector:
         carry both StructuredName and PhysicalPorts with MacAddress on Gen12 iLOs.
         Falls back to MACs already collected in inventory Ports for non-HPE vendors.
         """
-        logging.info("  Target %s: Collecting MACs from NetworkAdapters.", self.target)
+        logger.info("  Target %s: Collecting MACs from NetworkAdapters.", self.target)
 
-        adapter_urls = self._urls.get('NetworkAdapterUrls') or self._get_urls('NetworkAdapters')
+        adapter_urls = self._urls.get("NetworkAdapterUrls") or self._get_urls(
+            "NetworkAdapters"
+        )
         if not adapter_urls:
             return
 
         nic_counter = 0
-        inv_adapters_by_id = self._inventory.get('_NetworkAdaptersById', {})
+        inv_adapters_by_id = self._inventory.get("_NetworkAdaptersById", {})
         for url in sorted(adapter_urls):
             data = self.connect_server(url)
             if not data:
                 continue
 
             # Gen12 iLO: StructuredName and MACs live under Oem.Hpe
-            hpe_oem = data.get('Oem', {}).get('Hpe', {})
-            structured = hpe_oem.get('StructuredName') or data.get('StructuredName', '')
-            manufacturer = (data.get('Manufacturer') or '').lower()
-            adapter_id = (data.get('Id') or url.split('/')[-1]).upper()
+            hpe_oem = data.get("Oem", {}).get("Hpe", {})
+            structured = hpe_oem.get("StructuredName") or data.get("StructuredName", "")
+            manufacturer = (data.get("Manufacturer") or "").lower()
+            adapter_id = (data.get("Id") or url.split("/")[-1]).upper()
 
-            parts = structured.split('.') if structured else []
+            parts = structured.split(".") if structured else []
             is_lom = (
-                (len(parts) >= 2 and parts[1].upper() in ('LOM', 'FLEXLOM')) or
-                (parts[0].upper() == 'OCP' if parts else False) or
-                (not structured and any(m in manufacturer for m in self._lom_manufacturers)) or
+                (len(parts) >= 2 and parts[1].upper() in ("LOM", "FLEXLOM"))
+                or (parts[0].upper() == "OCP" if parts else False)
+                or (
+                    not structured
+                    and any(m in manufacturer for m in self._lom_manufacturers)
+                )
+                or
                 # Dell: NIC.Integrated.X and NIC.Embedded.X are onboard NICs
-                ('INTEGRATED' in adapter_id or 'EMBEDDED' in adapter_id)
+                ("INTEGRATED" in adapter_id or "EMBEDDED" in adapter_id)
             )
             if not is_lom:
                 nic_counter += 1
@@ -1170,172 +1291,249 @@ class RedfishIventoryCollector:
             adapter_speed = 0
             if inv_adapter:
                 adapter_speed = max(
-                    (p.get('PortSpeed') or 0 for p in inv_adapter.get('Ports', [])),
-                    default=0
+                    (p.get("PortSpeed") or 0 for p in inv_adapter.get("Ports", [])),
+                    default=0,
                 )
 
-            hpe_ports = hpe_oem.get('PhysicalPorts', [])
+            hpe_ports = hpe_oem.get("PhysicalPorts", [])
             inv_ports = sorted(
-                inv_adapter.get('Ports', []) if inv_adapter else [],
-                key=lambda p: p.get('MAC') or ''
+                inv_adapter.get("Ports", []) if inv_adapter else [],
+                key=lambda p: p.get("MAC") or "",
             )
             # Use hpe_ports when available; fall back to inventory ports for any missing entries.
             # hpe_ports may be sparse (only connected ports), so merge using sorted MAC lists.
             if hpe_ports:
-                sorted_hpe = sorted(hpe_ports, key=lambda p: p.get('MacAddress') or '')
+                sorted_hpe = sorted(hpe_ports, key=lambda p: p.get("MacAddress") or "")
                 # Build a combined list: prefer hpe_ports, fill gaps from inv_ports by position.
                 n_ports = max(len(sorted_hpe), len(inv_ports))
                 for port_idx in range(1, n_ports + 1):
-                    hpe_port = sorted_hpe[port_idx - 1] if port_idx - 1 < len(sorted_hpe) else None
-                    inv_port = inv_ports[port_idx - 1] if port_idx - 1 < len(inv_ports) else None
-                    mac = (hpe_port.get('MacAddress') if hpe_port else None) or \
-                          (inv_port.get('MAC') if inv_port else None)
+                    hpe_port = (
+                        sorted_hpe[port_idx - 1]
+                        if port_idx - 1 < len(sorted_hpe)
+                        else None
+                    )
+                    inv_port = (
+                        inv_ports[port_idx - 1]
+                        if port_idx - 1 < len(inv_ports)
+                        else None
+                    )
+                    mac = (hpe_port.get("MacAddress") if hpe_port else None) or (
+                        inv_port.get("MAC") if inv_port else None
+                    )
                     if mac:
                         if structured:
-                            key = self._mac_key_from_structured_name(structured, port_idx, nic_counter)
+                            key = self._mac_key_from_structured_name(
+                                structured, port_idx, nic_counter
+                            )
                         else:
                             key = f"NIC{nic_counter}_Port{port_idx}"
-                        speed_gbps = round((hpe_port.get('SpeedMbps') or 0) / 1000) \
-                            if hpe_port else 0
-                        speed_gbps = speed_gbps or (inv_port.get('PortSpeed') or 0 \
-                            if inv_port else 0) or adapter_speed
-                        logging.debug("  Target %s:   %s = %s", self.target, key, mac)
-                        macs[key] = {'mac': mac, 'speed_gbps': speed_gbps}
+                        speed_gbps = (
+                            round((hpe_port.get("SpeedMbps") or 0) / 1000)
+                            if hpe_port
+                            else 0
+                        )
+                        speed_gbps = (
+                            speed_gbps
+                            or (inv_port.get("PortSpeed") or 0 if inv_port else 0)
+                            or adapter_speed
+                        )
+                        logger.debug("  Target %s:   %s = %s", self.target, key, mac)
+                        macs[key] = {"mac": mac, "speed_gbps": speed_gbps}
                 continue
             if not inv_adapter:
                 continue
-            ports = sorted(inv_adapter.get('Ports', []), key=lambda p: p.get('MAC') or '')
+            ports = sorted(
+                inv_adapter.get("Ports", []), key=lambda p: p.get("MAC") or ""
+            )
             for port_idx, port in enumerate(ports, start=1):
-                mac = port.get('MAC')
+                mac = port.get("MAC")
                 if mac:
                     if structured:
-                        key = self._mac_key_from_structured_name(structured, port_idx, nic_counter)
+                        key = self._mac_key_from_structured_name(
+                            structured, port_idx, nic_counter
+                        )
                     elif is_lom:
                         key = f"L{port_idx}"
                     else:
                         key = f"NIC{nic_counter}_Port{port_idx}"
-                    logging.debug("  Target %s:   %s = %s", self.target, key, mac)
-                    macs[key] = {'mac': mac, 'speed_gbps': port.get('PortSpeed') or 0}
+                    logger.debug("  Target %s:   %s = %s", self.target, key, mac)
+                    macs[key] = {"mac": mac, "speed_gbps": port.get("PortSpeed") or 0}
 
     def get_mac_serial_data(self):
         """
         Return consolidated MAC address and serial number data.
         Used for updating Netbox interfaces and device records.
-        
+
         Returns:
             dict: MAC/serial information
         """
-        serial = self._inventory.get('SerialNumber', '')
+        serial = self._inventory.get("SerialNumber", "")
         # Ensure serial is stripped of trailing whitespace for consistent comparison
         if isinstance(serial, str):
             serial = serial.rstrip()
-        
+
         mac_serial_data = {
-            'serial': serial,
-            'manufacturer': self._inventory.get('Manufacturer', ''),
-            'model': self._inventory.get('Model', ''),
-            'memory_gb': round(
-                (self._inventory.get('MemorySummary', {})
-                .get('TotalSystemMemoryGiB') or 0) * 1.073741824
+            "serial": serial,
+            "manufacturer": self._inventory.get("Manufacturer", ""),
+            "model": self._inventory.get("Model", ""),
+            "memory_gb": round(
+                (
+                    self._inventory.get("MemorySummary", {}).get("TotalSystemMemoryGiB")
+                    or 0
+                )
+                * 1.073741824
             ),
-            'health': self._inventory.get('Status', {}).get('Health', 'Unknown'),
-            'macs': {}
+            "health": self._inventory.get("Status", {}).get("Health", "Unknown"),
+            "macs": {},
         }
-        
+
         # For HPE, use BaseNetworkAdapters — BMC-resident, always available, has StructuredName
         # and PhysicalPorts with MacAddress directly. Falls back to NetworkAdapters if the
         # endpoint is absent (newer iLO generations dropped BaseNetworkAdapters).
-        if self._urls.get('BaseNetworkAdapters'):
-            collected = self._collect_macs_from_base_network_adapters(mac_serial_data['macs'])
+        if self._urls.get("BaseNetworkAdapters"):
+            collected = self._collect_macs_from_base_network_adapters(
+                mac_serial_data["macs"]
+            )
         else:
             collected = False
 
-        if not collected and self._inventory.get('NetworkAdapters'):
-            self._collect_macs_from_network_adapters(mac_serial_data['macs'])
-        
+        if not collected and self._inventory.get("NetworkAdapters"):
+            self._collect_macs_from_network_adapters(mac_serial_data["macs"])
+
         # Collect remoteboard MAC
-        mac_serial_data['macs'].update(self._get_remoteboard_mac())
+        mac_serial_data["macs"].update(self._get_remoteboard_mac())
 
         return mac_serial_data
 
     def _collect_component_data(self, component, method, component_name, fields=None):
-        if component in self._urls and self._urls[component]:
+        if self._urls.get(component):
             if fields:
                 method(fields)
             else:
                 method()
         else:
-            logging.warning(
+            logger.warning(
                 "  Target %s: No %s URL provided! Cannot get %s data!",
                 self.target,
                 component,
-                component_name
+                component_name,
             )
 
     def collect(self):
         """
         collect the inventory from the server
         """
-        logging.info("  Target %s: Collecting data ...", self.target)
+        logger.info("  Target %s: Collecting data ...", self.target)
 
         # Get the System URLs
         self._get_system_urls()
-        if not self._urls.get('Systems'):
+        if not self._urls.get("Systems"):
             return None
 
         # Collect data for different components
-        self._collect_component_data('Systems', self._get_tpm_info, "TPM")
-        self._collect_component_data('Chassis_Root', self._get_chassis_urls, "Chassis")
+        self._collect_component_data("Systems", self._get_tpm_info, "TPM")
+        self._collect_component_data("Chassis_Root", self._get_chassis_urls, "Chassis")
         self._collect_component_data(
-            'Storage', self._get_storage_info, "Storage",
-            ('Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU')
+            "Storage",
+            self._get_storage_info,
+            "Storage",
+            ("Name", "Model", "Manufacturer", "SerialNumber", "PartNumber", "SKU"),
         )
         self._collect_component_data(
-            'Drives', self._get_drive_info, "drive",
+            "Drives",
+            self._get_drive_info,
+            "drive",
             (
-            'Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU',
-            'MediaType', 'CapacityBytes', 'Protocol'
-            )
+                "Name",
+                "Model",
+                "Manufacturer",
+                "SerialNumber",
+                "PartNumber",
+                "SKU",
+                "MediaType",
+                "CapacityBytes",
+                "Protocol",
+            ),
         )
         self._collect_component_data(
-            'Power', self._get_power_info, "PSU",
-            ('Name', 'Manufacturer', 'Model', 'SerialNumber', 'PartNumber', 'SKU')
+            "Power",
+            self._get_power_info,
+            "PSU",
+            ("Name", "Manufacturer", "Model", "SerialNumber", "PartNumber", "SKU"),
         )
         self._collect_component_data(
-            'Memory', self._get_memory_info, "memory",
+            "Memory",
+            self._get_memory_info,
+            "memory",
             (
-            'Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU',
-            'CapacityMiB', 'OperatingSpeedMhz', 'MemoryDeviceType'
-            )
+                "Name",
+                "Model",
+                "Manufacturer",
+                "SerialNumber",
+                "PartNumber",
+                "SKU",
+                "CapacityMiB",
+                "OperatingSpeedMhz",
+                "MemoryDeviceType",
+            ),
         )
         self._collect_component_data(
-            'Processors', self._get_processor_info, "Processors",
+            "Processors",
+            self._get_processor_info,
+            "Processors",
             (
-            'Name', 'Manufacturer', 'Model', 'SerialNumber', 'PartNumber', 'SKU',
-            'ProcessorType', 'TotalCores', 'TotalThreads', 'Description', 'MaxSpeedMHz'
-            )
+                "Name",
+                "Manufacturer",
+                "Model",
+                "SerialNumber",
+                "PartNumber",
+                "SKU",
+                "ProcessorType",
+                "TotalCores",
+                "TotalThreads",
+                "Description",
+                "MaxSpeedMHz",
+            ),
         )
         self._collect_component_data(
-            'PCIeDevices', self._get_pci_devices_info, "PCIeDevices",
+            "PCIeDevices",
+            self._get_pci_devices_info,
+            "PCIeDevices",
             (
-            'Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU',
-            'Links', 'PCIeFunctions', 'Id'
-            )
+                "Name",
+                "Model",
+                "Manufacturer",
+                "SerialNumber",
+                "PartNumber",
+                "SKU",
+                "Links",
+                "PCIeFunctions",
+                "Id",
+            ),
         )
         self._collect_component_data(
-            'NetworkAdapters', self._get_network_info, "NetworkAdapters",
+            "NetworkAdapters",
+            self._get_network_info,
+            "NetworkAdapters",
             (
-            'Name', 'Model', 'Manufacturer', 'SerialNumber', 'PartNumber', 'SKU',
-            'NetworkPorts', 'Ports', 'StructuredName'
-            )
+                "Name",
+                "Model",
+                "Manufacturer",
+                "SerialNumber",
+                "PartNumber",
+                "SKU",
+                "NetworkPorts",
+                "Ports",
+                "StructuredName",
+            ),
         )
 
         # Collect MAC/serial data while session is active (OPTIMIZATION)
         mac_serial_data = self.get_mac_serial_data()
-        self._inventory['mac_serial_data'] = mac_serial_data
+        self._inventory["mac_serial_data"] = mac_serial_data
 
         duration = round(time.time() - self._start_time, 2)
-        logging.info("  Target %s: Scrape duration: %s seconds", self.target, duration)
+        logger.info("  Target %s: Scrape duration: %s seconds", self.target, duration)
 
         return self._inventory
 
@@ -1344,43 +1542,42 @@ class RedfishIventoryCollector:
         close the session with the server
         """
         if self._auth_token:
-            logging.debug(
+            logger.debug(
                 "  Target %s: Deleting Redfish session with server %s",
                 self.target,
-                self.ip_address
+                self.ip_address,
             )
             session_url = f"https://{self.ip_address}{self.session_url}"
 
-            logging.debug("  Target %s: Using URL %s", self.target, session_url)
+            logger.debug("  Target %s: Using URL %s", self.target, session_url)
 
             try:
                 response = self._session.delete(
                     session_url,
                     verify=False,
                     timeout=self.timeout,
-                    headers={'x-auth-token': self._auth_token}
+                    headers={"x-auth-token": self._auth_token},
                 )
             except requests.exceptions.ReadTimeout as err:
-                logging.warning(
+                logger.warning(
                     "  Target %s: Failed to delete session with server %s: %s",
                     self.target,
                     self.ip_address,
-                    err
+                    err,
                 )
             else:
                 response.close()
-                logging.info(
-                    "  Target %s: Redfish Session deleted successfully.",
-                    self.target
+                logger.info(
+                    "  Target %s: Redfish Session deleted successfully.", self.target
                 )
 
         else:
-            logging.debug(
+            logger.debug(
                 "  Target %s: No Redfish session existing with server %s",
                 self.target,
-                self.ip_address
+                self.ip_address,
             )
 
         if self._session:
-            logging.info("  Target %s: Closing requests session.", self.target)
+            logger.info("  Target %s: Closing requests session.", self.target)
             self._session.close()
