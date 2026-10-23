@@ -6,4 +6,5 @@ logs/*
 servers*.txt
 request.http
 tests/*.json
+tests/snapshots/
 .venv/*

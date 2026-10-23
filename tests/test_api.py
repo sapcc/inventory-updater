@@ -1,16 +1,15 @@
 """
 Run the inventory-updater against one or more server targets via the API.
 
-The inventory-updater must already be running in API mode before calling this script:
-    python main.py -c config/config_qa-de-1.yaml --api -d -l tests/<run>.log
+Pass --config to start the API server automatically (log goes to the run folder):
+    python tests/test_api.py --config config/config_qa-de-1.yaml --servers servers_qa-de-1.txt
 
-Usage (single target):
-    python tests/test_api.py --target node013-bb098.cc.qa-de-1.cloud.sap
-
-Usage (server list):
+Or start the API manually first and omit --config:
+    python main.py -c config/config_qa-de-1.yaml --api -d
     python tests/test_api.py --servers servers_qa-de-1.txt
 
 Options:
+    --config    Config file — if given, the API server is started automatically
     --target    Single node hostname (NOT the BMC hostname)
     --servers   File with one hostname per line
     --url       Inventory-updater base URL (default: http://localhost:9200)
@@ -20,6 +19,7 @@ Options:
 """
 import argparse
 import json
+import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -34,6 +34,15 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 DEFAULT_TIMEOUT = 300
 DEFAULT_OUTPUT = "tests"
 DEFAULT_WORKERS = 5
+
+
+_WORKSPACE = Path(__file__).parent.parent
+
+
+def start_api_server(config: str, log_path: Path) -> subprocess.Popen:
+    """Start main.py in API mode with debug logging directed to log_path."""
+    cmd = [sys.executable, "main.py", "-c", config, "--api", "-d", "-l", str(log_path)]
+    return subprocess.Popen(cmd, cwd=_WORKSPACE)
 
 
 def wait_for_server(base_url: str, timeout: int = 30) -> bool:
@@ -127,6 +136,8 @@ def parse_args() -> argparse.Namespace:
                        help="Single node hostname")
     group.add_argument("--servers", metavar="FILE",
                        help="File with one hostname per line")
+    parser.add_argument("--config", metavar="FILE",
+                        help="Config file — starts the API server automatically")
     parser.add_argument("--url", default="http://localhost:9200", metavar="URL",
                         help="Inventory-updater base URL (default: %(default)s)")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, metavar="SECS",
@@ -146,10 +157,6 @@ def main() -> None:
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if not wait_for_server(base_url):
-        print(f"ERROR: inventory-updater did not become reachable within 30s at {base_url}")
-        sys.exit(1)
-
     targets = [args.target] if args.target else load_servers(args.servers)
     if not targets:
         print("ERROR: no targets found.")
@@ -159,26 +166,43 @@ def main() -> None:
     run_dir = output_dir / timestamp
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Targets  : {len(targets)}")
-    print(f"Workers  : {args.workers}")
-    print(f"Timeout  : {args.timeout}s per request")
-    print(f"Output   : {run_dir}")
-    print()
+    api_proc = None
+    if args.config:
+        log_path = run_dir / "app.log"
+        print(f"Starting API server (log: {log_path}) ...")
+        api_proc = start_api_server(args.config, log_path)
 
-    results = []
-    with ThreadPoolExecutor(max_workers=args.workers) as executor:
-        futures = {
-            executor.submit(query_target, base_url, t, args.timeout, run_dir): t
-            for t in targets
-        }
-        for future in as_completed(futures):
-            result = future.result()
-            status = "PASS" if result["success"] else "FAIL"
-            detail = f"HTTP {result['status']}" if result["status"] else result["error"]
-            print(f"  {status}  {result['elapsed']:>6.1f}s  {result['target']}  ({detail})")
-            results.append(result)
+    try:
+        if not wait_for_server(base_url):
+            print(f"ERROR: inventory-updater did not become reachable within 30s at {base_url}")
+            sys.exit(1)
 
-    failures = print_summary(results)
+        print(f"Targets  : {len(targets)}")
+        print(f"Workers  : {args.workers}")
+        print(f"Timeout  : {args.timeout}s per request")
+        print(f"Output   : {run_dir}")
+        print()
+
+        results = []
+        with ThreadPoolExecutor(max_workers=args.workers) as executor:
+            futures = {
+                executor.submit(query_target, base_url, t, args.timeout, run_dir): t
+                for t in targets
+            }
+            for future in as_completed(futures):
+                result = future.result()
+                status = "PASS" if result["success"] else "FAIL"
+                detail = f"HTTP {result['status']}" if result["status"] else result["error"]
+                print(f"  {status}  {result['elapsed']:>6.1f}s  {result['target']}  ({detail})")
+                results.append(result)
+
+        failures = print_summary(results)
+
+    finally:
+        if api_proc is not None:
+            api_proc.terminate()
+            api_proc.wait()
+
     sys.exit(0 if failures == 0 else 1)
 
 
