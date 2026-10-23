@@ -3,6 +3,7 @@ handles the redfish inventory collection requests
 """
 
 import logging
+import re
 import socket
 import time
 
@@ -30,6 +31,7 @@ class RedfishIventoryCollector:
         pwd,
         vendor_aliases=None,
         lom_manufacturers=None,
+        lom_max_speed_mbps=10000,
         label=None,
         bmc_ip=None,
     ):
@@ -43,6 +45,7 @@ class RedfishIventoryCollector:
         self._password = pwd
         self._vendor_aliases = {k.lower(): v for k, v in (vendor_aliases or {}).items()}
         self._lom_manufacturers = {m.lower() for m in (lom_manufacturers or [])}
+        self._lom_max_speed_mbps = lom_max_speed_mbps
 
         self.timeout = timeout
         self._response_time = 0
@@ -282,6 +285,8 @@ class RedfishIventoryCollector:
         try:
             if server_req is not None:
                 self.last_http_code = server_req.status_code
+                if not_found_ok and self.last_http_code == 404:
+                    return None
                 server_response = self._check_req_text(server_req)
         finally:
             if server_req is not None:
@@ -473,7 +478,7 @@ class RedfishIventoryCollector:
                         "  Target %s: No %s URL found in Chassi info for Chassis %s!",
                         self.target,
                         url,
-                        chassi_info["Name"],
+                        chassi_info.get("Name", chassi_info.get("Id", "unknown")),
                     )
 
     def _get_urls(self, url, not_found_ok=False):
@@ -876,6 +881,16 @@ class RedfishIventoryCollector:
                     pcie_device["DeviceClass"], ""
                 )
 
+                # Store NetworkDeviceFunction URLs for later MAC collection.
+                # On some Lenovo firmware the OCP/LOM NIC is absent from
+                # NetworkAdapters/Members but its PCIeFunction still carries
+                # Links.NetworkDeviceFunctions pointing to the port functions.
+                ndf_links = pcie_device_functions[0].get("Links", {}).get(
+                    "NetworkDeviceFunctions", []
+                )
+                if ndf_links:
+                    pcie_device["_NdfUrls"] = [f["@odata.id"] for f in ndf_links]
+
             pcie_devices_updated.append(pcie_device)
 
         self._inventory.update({"PCIeDevices": pcie_devices_updated})
@@ -959,6 +974,9 @@ class RedfishIventoryCollector:
             url.split("/")[-1].upper(): nic
             for url, nic in zip(nic_urls, network_cards_updated)
         }
+        # Probe PCIeDevices-based NICs that are absent from NetworkAdapters Members
+        # (e.g. Lenovo OCP/LOM NICs removed from the Members list by newer firmware).
+        self._probe_missing_nic_adapters(fields)
 
     def _get_network_info_from_ethernet_interfaces(self):
         """Fallback for vendors (e.g. Fujitsu) where NetworkAdapters is empty.
@@ -980,6 +998,120 @@ class RedfishIventoryCollector:
             )
 
         self._inventory.update({"NetworkAdapters": network_cards_updated})
+
+    def _probe_missing_nic_adapters(self, fields):
+        """Probe NetworkAdapter resources for PCIeDevices absent from NetworkAdapters Members.
+
+        Some Lenovo firmware versions list OCP/LOM NICs only under PCIeDevices but
+        not under NetworkAdapters/Members, so the normal collection loop misses them.
+        For each PCIeDevice whose ID has no corresponding NetworkAdapter entry, this
+        method tries fetching the NetworkAdapter URL directly (replacing underscores
+        with hyphens in the ID, matching Lenovo's naming convention).  If the probe
+        succeeds the adapter is processed identically to normal adapters and appended
+        to the inventory so its MACs are picked up later.  Non-NIC PCIeDevices with a
+        known non-network DeviceClass (e.g. MassStorageController) are skipped before
+        probing.  Others are probed and silently skipped on 404.
+        """
+        if not self._inventory.get("PCIeDevices") or not self._urls.get(
+            "NetworkAdapterUrls"
+        ):
+            return
+
+        known_ids = set(self._inventory.get("_NetworkAdaptersById", {}).keys())
+        # Derive the NetworkAdapters collection base URL from the first known entry.
+        base_url = "/".join(self._urls["NetworkAdapterUrls"][0].split("/")[:-1])
+
+        na_additions = []
+        url_additions = []
+
+        for pcie_dev in self._inventory["PCIeDevices"]:
+            pcie_id = pcie_dev.get("Id") or ""
+            if not pcie_id:
+                continue
+            # Compare using the canonical underscore format that _NetworkAdaptersById uses.
+            na_id = pcie_id.upper()
+            if na_id in known_ids:
+                continue
+
+            # Skip non-network PCIeDevices before probing. Some firmware returns 200 for
+            # the NetworkAdapter probe on RAID/storage controllers, creating spurious NIC
+            # inventory entries.
+            device_class = (pcie_dev.get("DeviceClass") or "").lower()
+            if "storage" in device_class:
+                logger.debug(
+                    "  Target %s: Skipping PCIeDevice %s (DeviceClass=%r, not a NIC).",
+                    self.target,
+                    pcie_id,
+                    pcie_dev.get("DeviceClass"),
+                )
+                continue
+
+            logger.debug(
+                "  Target %s: Probing PCIeDevice %s as NetworkAdapter"
+                " (DeviceClass=%r, NetboxName=%r).",
+                self.target,
+                pcie_id,
+                pcie_dev.get("DeviceClass"),
+                pcie_dev.get("NetboxName"),
+            )
+
+            probe_url = f"{base_url}/{pcie_id.replace('_', '-')}"
+            data = self.connect_server(probe_url, not_found_ok=True)
+            if not data:
+                logger.debug(
+                    "  Target %s: PCIeDevice %s not accessible as NetworkAdapter at %s.",
+                    self.target,
+                    pcie_id,
+                    probe_url,
+                )
+                continue
+
+            logger.info(
+                "  Target %s: Found NIC adapter via PCIeDevice probe (absent from Members): %s",
+                self.target,
+                probe_url,
+            )
+
+            nic = self._get_device_info(data, fields, value_check=False)
+            if not nic:
+                continue
+
+            nic["Ports"] = []
+            nic_ports_ref = (
+                nic.get("NetworkPorts")
+                if nic.get("NetworkPorts")
+                else nic.get("Ports")
+            )
+            if nic_ports_ref:
+                self._urls["NetworkPorts"] = nic_ports_ref["@odata.id"]
+                ports = self._get_urls("NetworkPorts")
+                ports_info = self._get_info_from_urls(ports)
+                ports_info.sort(key=lambda p: p.get("MAC") or "")
+                for port_info in ports_info:
+                    nic["Ports"].append(self._get_port_info(port_info))
+
+            port_speed_gbps = max(
+                ((port.get("PortSpeed") or 0) for port in nic["Ports"]), default=0
+            )
+            nic["NetboxName"] = (
+                f"NIC {int(port_speed_gbps)}Gb" if port_speed_gbps else "NIC"
+            )
+            nic["Description"] = (nic.get("Model") or "").strip()
+
+            na_additions.append(nic)
+            url_additions.append(probe_url)
+
+        if na_additions:
+            self._inventory["NetworkAdapters"] = (
+                self._inventory.get("NetworkAdapters", []) + na_additions
+            )
+            self._inventory["_NetworkAdaptersById"].update(
+                {
+                    url.split("/")[-1].upper(): nic
+                    for url, nic in zip(url_additions, na_additions)
+                }
+            )
+            self._urls["NetworkAdapterUrls"].extend(url_additions)
 
     def _collect_from_ethernet_interfaces(self):
         if not self._urls.get("EthernetInterfaces"):
@@ -1241,7 +1373,27 @@ class RedfishIventoryCollector:
 
         return True
 
-    def _collect_macs_from_network_adapters(self, macs):
+    def _build_mac_speed_mbps_map(self) -> dict:
+        """Build a MAC→SpeedMbps lookup from EthernetInterfaces.
+
+        Used by _collect_macs_from_network_adapters() to determine adapter speed on
+        Lenovo servers where Redfish PortSpeed is always 0 in the NetworkAdapters response.
+        Only entries with SpeedMbps > 0 are included; 0 means unknown/down so the map
+        lookup falls back to the existing adapter_speed == 0 behaviour.
+        """
+        result = {}
+        iface_urls = self._get_urls("EthernetInterfaces") or []
+        for url in iface_urls:
+            iface = self.connect_server(url, not_found_ok=True)
+            if not iface:
+                continue
+            mac = (iface.get("MACAddress") or iface.get("PermanentMACAddress") or "").lower()
+            speed_mbps = iface.get("SpeedMbps") or 0
+            if mac and speed_mbps > 0:
+                result[mac] = max(result.get(mac, 0), speed_mbps)
+        return result
+
+    def _collect_macs_from_network_adapters(self, macs, mac_speed_mbps_map=None):
         """Fallback MAC collection from Chassis/NetworkAdapters.
 
         Used when BaseNetworkAdapters is unavailable (HPE Gen12+) or for non-HPE vendors.
@@ -1270,13 +1422,37 @@ class RedfishIventoryCollector:
             manufacturer = (data.get("Manufacturer") or "").lower()
             adapter_id = (data.get("Id") or url.split("/")[-1]).upper()
 
+            # Gen12: MACs in Oem.Hpe.PhysicalPorts
+            # Always look up the inventory adapter for speed and port-count comparison.
+            inv_adapter = inv_adapters_by_id.get(adapter_id)
+            adapter_speed = 0
+            if inv_adapter:
+                # PortSpeed is stored in Gbps; convert to Mbps for comparison with
+                # lom_max_speed_mbps.  Lenovo firmware always reports 0 regardless of
+                # actual speed, so the conversion is usually a no-op there.
+                adapter_speed = max(
+                    (p.get("PortSpeed") or 0 for p in inv_adapter.get("Ports", [])),
+                    default=0,
+                ) * 1000
+                # Lenovo: PortSpeed=0 for all adapters even on 100GbE OCP cards.
+                # Use the EthernetInterfaces SpeedMbps map (built before Phase 1) to
+                # distinguish high-speed OCP NICs from low-speed onboard LOM adapters.
+                if adapter_speed == 0 and mac_speed_mbps_map:
+                    ports = inv_adapter.get("Ports", [])
+                    adapter_speed = max(
+                        (mac_speed_mbps_map.get((p.get("MAC") or "").lower(), 0)
+                         for p in ports),
+                        default=0,
+                    )
+
             parts = structured.split(".") if structured else []
             is_lom = (
                 (len(parts) >= 2 and parts[1].upper() in ("LOM", "FLEXLOM"))
                 or (parts[0].upper() == "OCP" if parts else False)
                 or (
                     not structured
-                    and any(m in manufacturer for m in self._lom_manufacturers)
+                    and any(m.lower() in manufacturer for m in self._lom_manufacturers)
+                    and (adapter_speed == 0 or adapter_speed <= self._lom_max_speed_mbps)
                 )
                 or
                 # Dell: NIC.Integrated.X and NIC.Embedded.X are onboard NICs
@@ -1284,16 +1460,6 @@ class RedfishIventoryCollector:
             )
             if not is_lom:
                 nic_counter += 1
-
-            # Gen12: MACs in Oem.Hpe.PhysicalPorts
-            # Always look up the inventory adapter for speed and port-count comparison.
-            inv_adapter = inv_adapters_by_id.get(adapter_id)
-            adapter_speed = 0
-            if inv_adapter:
-                adapter_speed = max(
-                    (p.get("PortSpeed") or 0 for p in inv_adapter.get("Ports", [])),
-                    default=0,
-                )
 
             hpe_ports = hpe_oem.get("PhysicalPorts", [])
             inv_ports = sorted(
@@ -1359,6 +1525,206 @@ class RedfishIventoryCollector:
                     logger.debug("  Target %s:   %s = %s", self.target, key, mac)
                     macs[key] = {"mac": mac, "speed_gbps": port.get("PortSpeed") or 0}
 
+    def _collect_macs_from_pcie_ndf(self, macs):
+        """Collect MACs via NetworkDeviceFunctions linked from PCIeFunctions.
+
+        On some firmware the OCP/LOM NIC is absent from Chassis/NetworkAdapters/Members,
+        so the normal collection and _probe_missing_nic_adapters both return 404.  The
+        PCIeFunction for that device, however, still exposes Links.NetworkDeviceFunctions
+        pointing to the per-port functions, each carrying Ethernet.MACAddress.
+
+        Only runs for PCIeDevices that had NDF links captured during PCIe
+        collection AND whose adapter ID is not already in NetworkAdapters.
+        """
+        known_adapter_ids = set(self._inventory.get("_NetworkAdaptersById", {}).keys())
+        already_collected = {v["mac"].lower() for v in macs.values() if v.get("mac")}
+
+        for pcie_dev in self._inventory.get("PCIeDevices", []):
+            ndf_urls = pcie_dev.get("_NdfUrls") or []
+            if not ndf_urls:
+                continue
+
+            pcie_id = pcie_dev.get("Id") or ""
+            adapter_id = pcie_id.replace("_", "-").upper()
+            if adapter_id in known_adapter_ids:
+                continue
+
+            logger.debug(
+                "  Target %s: Trying NDF for PCIeDevice %s (%d function URL(s)).",
+                self.target,
+                pcie_id,
+                len(ndf_urls),
+            )
+
+            pcie_manufacturer = (pcie_dev.get("Manufacturer") or "").lower()
+            port_idx = 0
+
+            for ndf_url in ndf_urls:
+                func = self.connect_server(ndf_url, not_found_ok=True)
+                if not func:
+                    logger.debug(
+                        "  Target %s:   NDF %s not accessible.", self.target, ndf_url
+                    )
+                    continue
+
+                mac = (func.get("Ethernet") or {}).get("MACAddress")
+                if not mac:
+                    continue
+                if mac.lower() in already_collected:
+                    continue
+
+                func_manufacturer = (func.get("Manufacturer") or pcie_manufacturer)
+                is_lom = any(
+                    m.lower() in func_manufacturer.lower()
+                    for m in self._lom_manufacturers
+                )
+
+                speed_mbps = (func.get("Ethernet") or {}).get("SpeedMbps") or 0
+                speed_gbps = round(speed_mbps / 1000) if speed_mbps else 0
+
+                port_idx += 1
+                key = f"L{port_idx}" if is_lom else f"NIC_NDF{port_idx}"
+                logger.debug(
+                    "  Target %s:   %s = %s (NDF from PCIeDevice %s)",
+                    self.target,
+                    key,
+                    mac,
+                    pcie_id,
+                )
+                macs[key] = {"mac": mac, "speed_gbps": speed_gbps}
+                already_collected.add(mac.lower())
+
+    def _collect_macs_from_ethernet_interfaces(self, macs):
+        """Collect host NIC MACs from EthernetInterfaces for vendors that use this path.
+
+        Covers three cases that NetworkAdapters cannot reach:
+        - Fujitsu (iRMC): NetworkAdapters is empty; all host NICs live in
+          EthernetInterfaces with DMTF-standard Description strings.
+        - Supermicro: PCIe add-in NICs are in NetworkAdapters, but the on-board
+          (integrated) NICs appear only in EthernetInterfaces with "OnBoard" in Name.
+        - Lenovo XCC: Some firmware versions omit the OCP/LOM NIC from the
+          NetworkAdapters Members list AND have no NetworkAdapters/slot-48 URL.
+          The OCP NIC ports appear only in Systems/1/EthernetInterfaces.  Any
+          MAC already collected via NetworkAdapters is skipped to avoid duplicates.
+        """
+        if not self._urls.get("EthernetInterfaces"):
+            return
+        manufacturer = self._inventory.get("Manufacturer", "").lower()
+        is_fujitsu = "fujitsu" in manufacturer
+        is_supermicro = "supermicro" in manufacturer
+        is_lenovo = "lenovo" in manufacturer
+        if not is_fujitsu and not is_supermicro and not is_lenovo:
+            return
+
+        iface_urls = self._get_urls("EthernetInterfaces")
+        if not iface_urls:
+            return
+
+        logger.info(
+            "  Target %s: Collecting MACs from EthernetInterfaces (%s).",
+            self.target,
+            "Fujitsu" if is_fujitsu else ("Supermicro OnBoard" if is_supermicro else "Lenovo OCP"),
+        )
+
+        nic_counter = 0
+        # Track slot→counter mapping for DMTF "NIC in Slot X" descriptions
+        pcie_slot_counter: dict[str, int] = {}
+        # For Lenovo: MACs already found via NetworkAdapters — skip duplicates.
+        already_collected_macs = (
+            {v["mac"].lower() for v in macs.values() if v.get("mac")}
+            if is_lenovo
+            else set()
+        )
+        lenovo_lom_counter = 0
+
+        for iface_url in iface_urls:
+            iface = self.connect_server(iface_url, not_found_ok=True)
+            if not iface:
+                continue
+
+            mac = iface.get("MACAddress") or iface.get("PermanentMACAddress")
+            if not mac:
+                continue
+
+            name = iface.get("Name") or ""
+            speed_mbps = iface.get("SpeedMbps") or 0
+            speed_gbps = round(speed_mbps / 1000) if speed_mbps else 0
+
+            if is_lenovo:
+                logger.debug(
+                    "  Target %s:   EthernetInterface Name=%r Id=%r MAC=%s SpeedMbps=%s",
+                    self.target,
+                    name,
+                    iface.get("Id"),
+                    mac,
+                    speed_mbps,
+                )
+                # Skip the host-side view of the BMC management link.
+                if iface.get("Id") == "ToManager":
+                    logger.debug(
+                        "  Target %s:   Skipping ToManager (virtual BMC-to-host interface).",
+                        self.target,
+                    )
+                    continue
+                if mac.lower() in already_collected_macs:
+                    continue
+                lenovo_lom_counter += 1
+                key = f"L{lenovo_lom_counter}"
+                logger.debug("  Target %s:   %s = %s (Lenovo OCP)", self.target, key, mac)
+                macs[key] = {"mac": mac, "speed_gbps": speed_gbps}
+                continue
+
+            if is_supermicro:
+                # Only collect on-board NICs; PCIe NICs come from NetworkAdapters.
+                if "OnBoard" not in name:
+                    continue
+                iface_id = iface.get("Id") or iface_url.split("/")[-1]
+                key = f"L{iface_id}"
+                logger.debug("  Target %s:   %s = %s (Supermicro OnBoard)", self.target, key, mac)
+                macs[key] = {"mac": mac, "speed_gbps": speed_gbps}
+                continue
+
+            # Fujitsu: use DMTF Description to derive key
+            description = iface.get("Description") or name or (iface.get("Id") or "")
+
+            # DMTF Pattern: "Integrated/Embedded NIC 1 Port X Partition 1" → LX
+            m = re.match(
+                r"(?:Integrated|Embedded)\s+NIC\s+\d+\s+Port\s+(\d+)\s+Partition\s+1",
+                description,
+                re.IGNORECASE,
+            )
+            if m:
+                key = f"L{m.group(1)}"
+                logger.debug("  Target %s:   %s = %s (Fujitsu integrated)", self.target, key, mac)
+                macs[key] = {"mac": mac, "speed_gbps": speed_gbps}
+                continue
+
+            # DMTF Pattern: "NIC in Slot X Port Y Partition 1" → NIC{counter}_Port{Y}
+            m = re.match(
+                r"NIC\s+in\s+Slot\s+(\d+)\s+Port\s+(\d+)\s+Partition\s+1",
+                description,
+                re.IGNORECASE,
+            )
+            if m:
+                slot, port = m.group(1), int(m.group(2))
+                if slot not in pcie_slot_counter:
+                    nic_counter += 1
+                    pcie_slot_counter[slot] = nic_counter
+                key = f"NIC{pcie_slot_counter[slot]}_Port{port}"
+                logger.debug("  Target %s:   %s = %s (Fujitsu slot)", self.target, key, mac)
+                macs[key] = {"mac": mac, "speed_gbps": speed_gbps}
+                continue
+
+            logger.warning(
+                "  Target %s: Could not derive NIC key for Fujitsu EthernetInterface"
+                " (description=%r name=%r id=%r) — skipping MAC %s.",
+                self.target,
+                iface.get("Description"),
+                name,
+                iface.get("Id"),
+                mac,
+            )
+
     def get_mac_serial_data(self):
         """
         Return consolidated MAC address and serial number data.
@@ -1387,6 +1753,15 @@ class RedfishIventoryCollector:
             "macs": {},
         }
 
+        # For Lenovo, build a MAC→SpeedMbps map from EthernetInterfaces before Phase 1.
+        # Lenovo firmware always reports PortSpeed=0 in NetworkAdapters, so Phase 1 cannot
+        # distinguish 100GbE OCP cards from 1GbE onboard LOM by speed alone.  The map is
+        # passed to _collect_macs_from_network_adapters() as a fallback speed source so
+        # that 100GbE OCP adapters are correctly classified as NIC rather than LOM.
+        mac_speed_mbps_map: dict = {}
+        if "lenovo" in (self._inventory.get("Manufacturer") or "").lower():
+            mac_speed_mbps_map = self._build_mac_speed_mbps_map()
+
         # For HPE, use BaseNetworkAdapters — BMC-resident, always available, has StructuredName
         # and PhysicalPorts with MacAddress directly. Falls back to NetworkAdapters if the
         # endpoint is absent (newer iLO generations dropped BaseNetworkAdapters).
@@ -1398,7 +1773,15 @@ class RedfishIventoryCollector:
             collected = False
 
         if not collected and self._inventory.get("NetworkAdapters"):
-            self._collect_macs_from_network_adapters(mac_serial_data["macs"])
+            self._collect_macs_from_network_adapters(mac_serial_data["macs"], mac_speed_mbps_map)
+
+        # Some Lenovo XCC firmware omits the OCP/LOM NIC from NetworkAdapters/Members
+        # but exposes its MACs via PCIeFunction Links.NetworkDeviceFunctions.
+        self._collect_macs_from_pcie_ndf(mac_serial_data["macs"])
+
+        # Fujitsu (NetworkAdapters empty) and Supermicro (OnBoard NICs only in
+        # EthernetInterfaces) need an additional collection pass.
+        self._collect_macs_from_ethernet_interfaces(mac_serial_data["macs"])
 
         # Collect remoteboard MAC
         mac_serial_data["macs"].update(self._get_remoteboard_mac())

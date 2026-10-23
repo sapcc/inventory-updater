@@ -14,7 +14,7 @@ import traceback
 import falcon
 import requests
 
-from netbox import NetboxInventoryUpdater
+from netbox import NetboxConnectionException, NetboxInventoryUpdater
 from redfish_collector import CollectorException, RedfishIventoryCollector
 
 logger = logging.getLogger(__name__)
@@ -161,6 +161,9 @@ class InventoryCollector:
         except HandlerException as exc:
             logger.error("A Handler Exception occured: %s", traceback.format_exc())
             raise falcon.HTTPBadRequest(description=str(exc)) from exc
+        except NetboxConnectionException as exc:
+            logger.error("Netbox connection failed: %s", exc)
+            raise falcon.HTTPServiceUnavailable(description=str(exc)) from exc
 
         duration = round(time.time() - start_time, 2)
         if result == 0:
@@ -237,6 +240,7 @@ class InventoryCollector:
                 pwd=self.pwd,
                 vendor_aliases=self.netbox_connection.manufacturer_aliases,
                 lom_manufacturers=self.netbox_connection.lom_manufacturers,
+                lom_max_speed_mbps=self.netbox_connection.lom_max_speed_mbps,
                 bmc_ip=bmc_ip,
             )
             server_collector.get_session()

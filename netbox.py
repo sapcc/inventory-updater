@@ -39,11 +39,12 @@ class NetboxConnection:
                 ["remoteboard", "iLO", "iDRAC", "XCC", "iRMC", "BMC", "MGMT"],
             )
         }
-        # Manufacturers whose NICs map to L-type interfaces (L1, L2, ...) rather than NIC1, NIC2.
-        # Typically onboard/management NICs (Intel I350, Broadcom BCM5719 OCP).
+        # NICs from these manufacturers get L-type interface names (L1, L2, ...)
+        # when no StructuredName is present and port speed <= lom_max_speed_mbps.
         self.lom_manufacturers = {
             m.lower() for m in config.get("lom_manufacturers", [])
         }
+        self.lom_max_speed_mbps = int(config.get("lom_max_speed_mbps", 10000))
         self.create_missing_interfaces = config.get("create_missing_interfaces", False)
 
         self.netbox_url = os.getenv("NETBOX_URL", config.get("netbox", {}).get("url"))
@@ -90,6 +91,9 @@ class NetboxConnection:
                     f"Netbox Connection Error. Response : {err}: {response.content}"
                 )
             raise NetboxConnectionException(message) from err
+
+        except requests.exceptions.RequestException as err:
+            raise NetboxConnectionException(f"Netbox Request Error: {err}") from err
 
         if method == "GET" and response.json():
             result = response.json()
@@ -227,6 +231,8 @@ class NetboxInventoryUpdater:
                     unique_candidates.append(c)
 
             for query in unique_candidates:
+                if len(query) < 2:
+                    continue
                 results = self.netbox_connection.send_request(
                     url=url, method="GET", params={"q": query}
                 )["results"]
