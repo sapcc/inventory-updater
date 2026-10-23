@@ -5,6 +5,7 @@ config/*
 logs/*
 servers*.txt
 request.http
-tests/*.json
+tests/*/*.json
+tests/*/*.log
 tests/snapshots/
 .venv/*
