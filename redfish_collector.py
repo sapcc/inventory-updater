@@ -1028,8 +1028,8 @@ class RedfishIventoryCollector:
             pcie_id = pcie_dev.get("Id") or ""
             if not pcie_id:
                 continue
-            # Compare using the canonical underscore format that _NetworkAdaptersById uses.
-            na_id = pcie_id.upper()
+            # _NetworkAdaptersById keys use hyphen format (built from URL ".../slot-1").
+            na_id = pcie_id.replace("_", "-").upper()
             if na_id in known_ids:
                 continue
 
@@ -1637,6 +1637,84 @@ class RedfishIventoryCollector:
         )
         lenovo_lom_counter = 0
 
+        if is_lenovo:
+            # Phase 1 (NetworkAdapters) cannot read MACs from Lenovo firmware because
+            # Lenovo NetworkAdapter Ports lack MAC addresses — only EthernetInterfaces
+            # have them.  Here we collect all valid host interfaces, then group them by
+            # NetworkAdapter (using the port-count stored in the inventory) so we can
+            # classify each adapter as a high-speed NIC (→ NICx_Porty) or a low-speed
+            # LOM (→ Ln) based on the maximum speed reported by any port in the group.
+            valid_ifaces: list[dict] = []
+            for iface_url in iface_urls:
+                iface = self.connect_server(iface_url, not_found_ok=True)
+                if not iface:
+                    continue
+                mac = iface.get("MACAddress") or iface.get("PermanentMACAddress")
+                if not mac:
+                    continue
+                name = iface.get("Name") or ""
+                speed_mbps = iface.get("SpeedMbps") or 0
+                speed_gbps = round(speed_mbps / 1000) if speed_mbps else 0
+                iface_id = iface.get("Id") or ""
+                logger.debug(
+                    "  Target %s:   EthernetInterface Name=%r Id=%r MAC=%s SpeedMbps=%s",
+                    self.target, name, iface_id, mac, speed_mbps,
+                )
+                if iface_id == "ToManager":
+                    logger.debug(
+                        "  Target %s:   Skipping ToManager (virtual BMC-to-host interface).",
+                        self.target,
+                    )
+                    continue
+                if mac.lower() in already_collected_macs:
+                    continue
+                valid_ifaces.append({"mac": mac, "speed_mbps": speed_mbps, "speed_gbps": speed_gbps})
+
+            inv_adapters_by_id = self._inventory.get("_NetworkAdaptersById", {})
+            # NetworkAdapterUrls may contain duplicates if the probe re-added Members.
+            adapter_urls = sorted(set(self._urls.get("NetworkAdapterUrls") or []))
+            iface_ptr = 0
+            for adapter_url in adapter_urls:
+                adapter_id = adapter_url.split("/")[-1].upper()
+                inv_adapter = inv_adapters_by_id.get(adapter_id)
+                if not inv_adapter:
+                    continue
+                port_count = len(inv_adapter.get("Ports", []))
+                if port_count == 0:
+                    continue
+                adp_manufacturer = (inv_adapter.get("Manufacturer") or "").lower()
+                group = valid_ifaces[iface_ptr : iface_ptr + port_count]
+                iface_ptr += port_count
+                if not group:
+                    break
+                group_max_speed = max(f["speed_mbps"] for f in group)
+                is_lom = (
+                    any(m in adp_manufacturer for m in self._lom_manufacturers)
+                    and group_max_speed <= self._lom_max_speed_mbps
+                )
+                if not is_lom:
+                    nic_counter += 1
+                for port_idx, face in enumerate(sorted(group, key=lambda f: f["mac"]), start=1):
+                    if is_lom:
+                        lenovo_lom_counter += 1
+                        key = f"L{lenovo_lom_counter}"
+                    else:
+                        key = f"NIC{nic_counter}_Port{port_idx}"
+                    logger.debug(
+                        "  Target %s:   %s = %s (Lenovo, adapter %s)",
+                        self.target, key, face["mac"], adapter_id,
+                    )
+                    macs[key] = {"mac": face["mac"], "speed_gbps": face["speed_gbps"]}
+            for face in valid_ifaces[iface_ptr:]:
+                lenovo_lom_counter += 1
+                key = f"L{lenovo_lom_counter}"
+                logger.debug(
+                    "  Target %s:   %s = %s (Lenovo remaining)",
+                    self.target, key, face["mac"],
+                )
+                macs[key] = {"mac": face["mac"], "speed_gbps": face["speed_gbps"]}
+            return
+
         for iface_url in iface_urls:
             iface = self.connect_server(iface_url, not_found_ok=True)
             if not iface:
@@ -1649,30 +1727,6 @@ class RedfishIventoryCollector:
             name = iface.get("Name") or ""
             speed_mbps = iface.get("SpeedMbps") or 0
             speed_gbps = round(speed_mbps / 1000) if speed_mbps else 0
-
-            if is_lenovo:
-                logger.debug(
-                    "  Target %s:   EthernetInterface Name=%r Id=%r MAC=%s SpeedMbps=%s",
-                    self.target,
-                    name,
-                    iface.get("Id"),
-                    mac,
-                    speed_mbps,
-                )
-                # Skip the host-side view of the BMC management link.
-                if iface.get("Id") == "ToManager":
-                    logger.debug(
-                        "  Target %s:   Skipping ToManager (virtual BMC-to-host interface).",
-                        self.target,
-                    )
-                    continue
-                if mac.lower() in already_collected_macs:
-                    continue
-                lenovo_lom_counter += 1
-                key = f"L{lenovo_lom_counter}"
-                logger.debug("  Target %s:   %s = %s (Lenovo OCP)", self.target, key, mac)
-                macs[key] = {"mac": mac, "speed_gbps": speed_gbps}
-                continue
 
             if is_supermicro:
                 # Only collect on-board NICs; PCIe NICs come from NetworkAdapters.
