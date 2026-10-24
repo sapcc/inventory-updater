@@ -1645,6 +1645,11 @@ class RedfishIventoryCollector:
             # classify each adapter as a high-speed NIC (→ NICx_Porty) or a low-speed
             # LOM (→ Ln) based on the maximum speed reported by any port in the group.
             valid_ifaces: list[dict] = []
+            # Capture actual per-port speeds even for already-collected MACs so we
+            # can correct Phase 1 speeds.  NetworkAdapter Port MaxSpeedGbps may be
+            # the chip aggregate (e.g. BCM57508 reports 200 for a 2×100GbE card);
+            # EthernetInterface SpeedMbps reflects the real negotiated/port rate.
+            eth_speed_by_mac: dict[str, int] = {}
             for iface_url in iface_urls:
                 iface = self.connect_server(iface_url, not_found_ok=True)
                 if not iface:
@@ -1652,6 +1657,7 @@ class RedfishIventoryCollector:
                 mac = iface.get("MACAddress") or iface.get("PermanentMACAddress")
                 if not mac:
                     continue
+                mac_lower = mac.lower()
                 name = iface.get("Name") or ""
                 speed_mbps = iface.get("SpeedMbps") or 0
                 speed_gbps = round(speed_mbps / 1000) if speed_mbps else 0
@@ -1666,13 +1672,57 @@ class RedfishIventoryCollector:
                         self.target,
                     )
                     continue
-                if mac.lower() in already_collected_macs:
+                if speed_mbps > 0:
+                    eth_speed_by_mac[mac_lower] = speed_mbps
+                if mac_lower in already_collected_macs:
                     continue
                 valid_ifaces.append({"mac": mac, "speed_mbps": speed_mbps, "speed_gbps": speed_gbps})
 
             inv_adapters_by_id = self._inventory.get("_NetworkAdaptersById", {})
             # NetworkAdapterUrls may contain duplicates if the probe re-added Members.
             adapter_urls = sorted(set(self._urls.get("NetworkAdapterUrls") or []))
+
+            # Use EthernetInterface speeds to correct Phase 1 speeds and NetboxNames.
+            # Build a reverse MAC→key map once, then patch per adapter so inactive
+            # ports of the same adapter get the same speed as the active sibling.
+            if eth_speed_by_mac:
+                mac_to_key = {
+                    (entry.get("mac") or "").lower(): k
+                    for k, entry in macs.items()
+                }
+                for adp_url in adapter_urls:
+                    adp_id = adp_url.split("/")[-1].upper()
+                    inv_adp = inv_adapters_by_id.get(adp_id)
+                    if not inv_adp:
+                        continue
+                    port_macs = [
+                        (p.get("MAC") or "").lower()
+                        for p in inv_adp.get("Ports", [])
+                    ]
+                    adp_eth_speeds = [
+                        eth_speed_by_mac[m] for m in port_macs if m in eth_speed_by_mac
+                    ]
+                    if not adp_eth_speeds:
+                        continue
+                    adp_speed_gbps = round(max(adp_eth_speeds) / 1000)
+                    if adp_speed_gbps <= 0:
+                        continue
+                    new_name = f"NIC {adp_speed_gbps}Gb"
+                    if inv_adp.get("NetboxName") != new_name:
+                        logger.debug(
+                            "  Target %s:   Correcting NetboxName for adapter %s: %r -> %r",
+                            self.target, adp_id, inv_adp.get("NetboxName"), new_name,
+                        )
+                        inv_adp["NetboxName"] = new_name
+                    for port_mac in port_macs:
+                        macs_key = mac_to_key.get(port_mac)
+                        if macs_key and macs[macs_key].get("speed_gbps", 0) != adp_speed_gbps:
+                            logger.debug(
+                                "  Target %s:   Correcting speed for %s: %dGb -> %dGb",
+                                self.target, macs_key,
+                                macs[macs_key].get("speed_gbps", 0), adp_speed_gbps,
+                            )
+                            macs[macs_key]["speed_gbps"] = adp_speed_gbps
             iface_ptr = 0
             for adapter_url in adapter_urls:
                 adapter_id = adapter_url.split("/")[-1].upper()
